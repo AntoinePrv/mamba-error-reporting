@@ -44,8 +44,8 @@ def select_solvables_df(pool: libmambapy.Pool, dep_ids: Sequence[int]) -> pd.Dat
         for sol in pool.select_solvables(dep):
             solvables.append(
                 {
-                    "dependency": dep,
-                    "solvable": sol,
+                    "dependency_id": dep,
+                    "solvable_id": sol,
                 }
             )
     return pd.DataFrame(solvables)
