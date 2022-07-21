@@ -1,0 +1,26 @@
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python
+  - pip
+  - mamba
+  # Need unreleased bindings
+  # - libmambapy>0.24
+  # For analysis
+  - pandas
+  - numpy
+  - matplotlib
+  - networkx
+  - jupyterlab
+  # For depvelopment
+  # Awaiting PR, in the meantime
+  # - python-lsp-server
+  - pip:
+    - python-lsp-server
+    - pylsp-rope
+    - pyls-isort
+    - pyflakes
+    - flake8
+    - python-lsp-black
+    - python-lsp-rope
