@@ -96,12 +96,17 @@ def create_pubgrub() -> tuple[libmambapy.Solver, libmambapy.Pool]:
 def create_pubgrub_hard() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return _create_problem_manual(
         packages=[
-            {"name": "menu", "version": "1.5.0", "dependencies": ["dropdown=2.*"]},
-            {"name": "menu", "version": "1.4.0", "dependencies": ["dropdown=2.*"]},
+            {"name": "menu", "version": "2.1.0", "dependencies": ["dropdown>=2.1", "emoji"]},
+            {"name": "menu", "version": "2.0.1", "dependencies": ["dropdown>=2", "emoji"]},
+            {"name": "menu", "version": "2.0.0", "dependencies": ["dropdown>=2", "emoji"]},
+            {"name": "menu", "version": "1.5.0", "dependencies": ["dropdown=2.*", "emoji"]},
+            {"name": "menu", "version": "1.4.0", "dependencies": ["dropdown=2.*", "emoji"]},
             {"name": "menu", "version": "1.3.0", "dependencies": ["dropdown=2.*"]},
             {"name": "menu", "version": "1.2.0", "dependencies": ["dropdown=2.*"]},
             {"name": "menu", "version": "1.1.0", "dependencies": ["dropdown=1.*"]},
             {"name": "menu", "version": "1.0.0", "dependencies": ["dropdown=1.*"]},
+            {"name": "emoji", "version": "1.1.0", "dependencies": ["libicons=2.*"]},
+            {"name": "emoji", "version": "1.0.0", "dependencies": ["libicons=2.*"]},
             {"name": "dropdown", "version": "2.3.0", "dependencies": ["libicons=2.*"]},
             {"name": "dropdown", "version": "2.2.0", "dependencies": ["libicons=2.*"]},
             {"name": "dropdown", "version": "2.1.0", "dependencies": ["libicons=2.*"]},
