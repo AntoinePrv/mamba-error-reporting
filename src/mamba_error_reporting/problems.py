@@ -26,18 +26,14 @@ def _create_package(
     }
 
 
-def _create_repodata(
-    directory: Union[str, pathlib.Path], packages: Sequence[str]
-) -> None:
+def _create_repodata(directory: Union[str, pathlib.Path], packages: Sequence[str]) -> None:
     dierctory = pathlib.Path(directory)
     (dierctory / "noarch").mkdir()
     repodata_file = dierctory / "noarch" / "repodata.json"
     repodata = {}
     repodata["packages"] = {}
     for p in packages:
-        repodata["packages"][
-            f"{p['name']}-{p['version']}-{p['build_string']}.tar.bz2"
-        ] = p
+        repodata["packages"][f"{p['name']}-{p['version']}-{p['build_string']}.tar.bz2"] = p
     repodata_file.write_text(json.dumps(repodata))
 
 
@@ -58,9 +54,7 @@ def create_basic_conflict():
         # change this to point where you cloned mamba
         channels = [f"file:///{d}"]
 
-        mamba.utils.load_channels(
-            pool, channels, repos, prepend=False, platform="linux-64"
-        )
+        mamba.utils.load_channels(pool, channels, repos, prepend=False, platform="linux-64")
     specs = ["A=0.4.0"]
 
     solver_options = [(libmambapy.SOLVER_FLAG_ALLOW_DOWNGRADE, 1)]
@@ -88,9 +82,7 @@ def create_pubgrub():
                 _create_package("dropdown", "2.2.0", dependencies=["icons=2.*"]),
                 _create_package("dropdown", "2.1.0", dependencies=["icons=2.*"]),
                 _create_package("dropdown", "2.0.0", dependencies=["icons=2.*"]),
-                _create_package(
-                    "dropdown", "1.8.0", dependencies=["icons=1.*", "intl=3.*"]
-                ),
+                _create_package("dropdown", "1.8.0", dependencies=["icons=1.*", "intl=3.*"]),
                 # create_package("icons", "2.1.0"),  # Not original
                 _create_package("icons", "2.0.0"),
                 # create_package("icons", "1.2.0"),  # Not original
@@ -104,9 +96,7 @@ def create_pubgrub():
         # change this to point where you cloned mamba
         channels = [f"file:///{d}"]
 
-        mamba.utils.load_channels(
-            pool, channels, repos, prepend=False, platform="linux-64"
-        )
+        mamba.utils.load_channels(pool, channels, repos, prepend=False, platform="linux-64")
     specs = ["menu", "icons=1.*", "intl=5.*"]
     # specs = ["menu", "icons=1.*", "intl>=4.0"]  # Not original
 
@@ -133,6 +123,4 @@ def create_pytorch():
 
 
 def create_r_base():
-    return create_conda_forge(
-        ["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"]
-    )
+    return create_conda_forge(["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"])
