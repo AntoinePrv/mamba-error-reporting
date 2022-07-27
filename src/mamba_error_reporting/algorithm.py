@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import List, Sequence
+from typing import List, Sequence, Any
 
 import libmambapy
 import networkx as nx
@@ -25,22 +25,40 @@ class ProblemData:
         package_info = {}
         problems_by_type = {}
 
-        for p in solver.all_problems_structured():
-            # Root dependencies are in JOB with source not useful
-            if p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB:
-                p.source_id = 0
-                package_info[p.source_id] = libmambapy.PackageInfo("root", "", "", 0)
+        def add_solvable(id, pkg_info = None):
+            graph.add_node(id)
+            package_info[id] = pkg_info if pkg_info is not None else pool.id2pkginfo(id)
 
+        def add_dependency(source_id, dep_id, dep_name):
+            dependency_names[p.dep_id] = dep_name
+            solvs = pool.select_solvables(dep_id)
+            for s in solvs:
+                add_solvable(s, pool.id2pkginfo(s))
+                graph.add_edge(source_id, s, dependency_id=dep_id)
+
+        for p in solver.all_problems_structured():
             problems_by_type.setdefault(p.type, []).append(p)
-            if p.source() is not None:
-                package_info[p.source_id] = pool.id2pkginfo(p.source_id)
-            if p.target() is not None:
-                package_info[p.target_id] = pool.id2pkginfo(p.target_id)
-            if p.dep() is not None:
-                solvs = pool.select_solvables(p.dep_id)
-                dependency_names[p.dep_id] = p.dep()
-                package_info.update({s: pool.id2pkginfo(s) for s in solvs})
-                graph.add_edges_from(((p.source_id, s) for s in solvs), dependency_id=p.dep_id)
+
+            # Root dependencies are in JOB with source not useful (except 0)
+            if p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB:
+                if p.source_id == 0:
+                    add_solvable(0, libmambapy.PackageInfo("problem", "", "", 0))
+                    add_dependency(0, p.dep_id, p.dep())
+                else:
+                    # FIXME hope that's not taken
+                    add_solvable(-1, libmambapy.PackageInfo("installed", "", "", 0))
+                    add_dependency(-1, p.dep_id, p.dep())
+            elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_REQUIRES:
+                add_solvable(p.source_id)
+                add_dependency(p.source_id, p.dep_id, p.dep())
+            else:
+                if p.source() is not None:
+                    add_solvable(p.source_id)
+                if p.target() is not None:
+                    add_solvable(p.target_id)
+                if p.dep() is not None:
+                    # Assuming source is valid
+                    add_dependency(p.source_id, p.dep_id, p.dep())
 
         return ProblemData(
             graph=graph,
@@ -65,6 +83,11 @@ class GroupId:
             cls.count = -1
         cls.count += 1
         return GroupId(cls.count)
+
+    def __lt__(self, other: Any) -> bool:
+        if isinstance(other, GroupId):
+            return self.id.__lt__(other.id)
+        return NotImplemented
 
 
 @dataclasses.dataclass
