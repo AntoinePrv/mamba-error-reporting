@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import List, Sequence
+from typing import Iterable, List, Sequence, TypeVar
 
 import libmambapy
 import networkx as nx
 
 DependencyId = int
 SolvableId = int
+GroupId = int
+NodeType = TypeVar("NodeType")
+EdgeType = TypeVar("EdgeType")
 
 
 @dataclasses.dataclass
@@ -78,9 +81,6 @@ class Counter:
         return old
 
 
-GroupId = int
-
-
 @dataclasses.dataclass
 class SolvableGroups:
     solv_to_group: dict[SolvableId, GroupId] = dataclasses.field(default_factory=dict)
@@ -125,7 +125,7 @@ def compressable_solvable_graph(
     return compatibles
 
 
-def greedy_clique_partition(graph: nx.Graph) -> List[List[SolvableId]]:
+def greedy_clique_partition(graph: nx.Graph) -> List[List[NodeType]]:
     graph = graph.copy()
     cliques = []
     while len(graph) > 0:
@@ -160,3 +160,49 @@ def compress_graph(pb_data: ProblemData) -> tuple[nx.DiGraph, SolvableGroups]:
         for (a, b), attr in pb_data.graph.edges.items()
     )
     return compressed_graph, groups
+
+
+def ancestors_subgraph(graph: nx.DiGraph, node: NodeType) -> nx.DiGraph:
+    ancestors = set(nx.ancestors(graph, node))
+    ancestors.add(node)
+    return nx.subgraph_view(graph, filter_node=lambda n: (n in ancestors))
+
+
+def find_root(graph: nx.DiGraph, node: NodeType) -> NodeType:
+    visited = set()
+    while graph.in_degree(node) > 0:
+        if node in visited:
+            raise RuntimeError("Cycle detected")
+        visited.add(node)
+        node = next(graph.predecessors(node))
+    return node
+
+
+def explanation_path(
+    graph: nx.DiGraph, root: NodeType, visited: set[GroupId], is_multi: dict[GroupId, bool]
+) -> Iterable[int, DependencyId, GroupId, str]:
+    to_visit = [(None, None, root, 0)]
+    while len(to_visit) > 0:
+        dep_id_from, old_node, node, depth = to_visit.pop()
+
+        successors = {}
+        for s in graph.successors(node):
+            successors.setdefault(graph.edges[(node, s)]["dependency_id"], []).append(s)
+
+        if len(successors) == 0:
+            visited.add(node)
+            yield (depth, dep_id_from, node, "leaf")
+        elif node in visited:
+            yield (depth, dep_id_from, node, "visited")
+        else:
+            visited.add(node)
+            # We only need to pick one cause of conflict, we choose the one with minium
+            # dependency splits.
+            dep_id = min(successors, key=lambda id: len(successors[id]))
+            for s in successors[dep_id]:
+                to_visit.append((dep_id, node, s, depth + 1))
+            if old_node is None:
+                type = "single"
+            else:
+                type = "multi" if is_multi[graph.edges[(old_node, node)]["dependency_id"]] else "single"
+            yield (depth, dep_id_from, node, type)
