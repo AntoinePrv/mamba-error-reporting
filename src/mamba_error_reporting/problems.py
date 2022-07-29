@@ -149,3 +149,6 @@ def create_pytorch() -> tuple[libmambapy.Solver, libmambapy.Pool]:
 
 def create_r_base() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"])
+
+def create_scip() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    return create_conda_forge(["scip=8.*", "pyscipopt<4.0"])
