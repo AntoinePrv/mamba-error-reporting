@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import List, Sequence, Any
+from typing import List, Sequence
 
 import libmambapy
 import networkx as nx
@@ -25,7 +25,7 @@ class ProblemData:
         package_info = {}
         problems_by_type = {}
 
-        def add_solvable(id, pkg_info = None):
+        def add_solvable(id, pkg_info=None):
             graph.add_node(id)
             package_info[id] = pkg_info if pkg_info is not None else pool.id2pkginfo(id)
 
@@ -68,26 +68,17 @@ class ProblemData:
         )
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class GroupId:
-    """Strongly typed solvable set ID.
+@dataclasses.dataclass
+class Counter:
+    cnt: int = 0
 
-    Used to make new dependency-like ids without number conflict.
-    """
+    def __call__(self) -> int:
+        old = self.cnt
+        self.cnt += 1
+        return old
 
-    id: int
 
-    @classmethod
-    def new(cls) -> GroupId:
-        if not hasattr(cls, "count"):
-            cls.count = -1
-        cls.count += 1
-        return GroupId(cls.count)
-
-    def __lt__(self, other: Any) -> bool:
-        if isinstance(other, GroupId):
-            return self.id.__lt__(other.id)
-        return NotImplemented
+GroupId = int
 
 
 @dataclasses.dataclass
@@ -146,6 +137,7 @@ def greedy_clique_partition(graph: nx.Graph) -> List[List[SolvableId]]:
 
 def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
     groups = SolvableGroups()
+    counter = Counter()
 
     # Add Conflicts edges to avoid merging the nodes
     graph = pb_data.graph.copy()
@@ -156,7 +148,7 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
             compressable_solvable_graph(graph, solvs, children={n: set(graph.successors(n)) for n in solvs})
         )
         for c in cliques:
-            groups.set_solvables(GroupId.new(), c)
+            groups.set_solvables(counter(), c)
     return groups
 
 
