@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 import itertools
 from typing import Iterable, List, Sequence, TypeVar
 
@@ -178,9 +179,18 @@ def find_root(graph: nx.DiGraph, node: NodeType) -> NodeType:
     return node
 
 
+class ExplanationType(enum.Enum):
+    leaf = "leaf"
+    visited = "visited"
+    multi_split = "multi_split"
+    multi_elem = "multi_elem"
+    single = "single"
+
+
 def explanation_path(
     graph: nx.DiGraph, root: NodeType, visited: set[GroupId], is_multi: dict[GroupId, bool]
-) -> Iterable[int, DependencyId, GroupId, str]:
+) -> Iterable[int, DependencyId, GroupId, ExplanationType]:
+    visited_multi = set()
     to_visit = [(None, None, root, 0)]
     while len(to_visit) > 0:
         dep_id_from, old_node, node, depth = to_visit.pop()
@@ -191,18 +201,29 @@ def explanation_path(
 
         if len(successors) == 0:
             visited.add(node)
-            yield (depth, dep_id_from, node, "leaf")
+            yield (depth, dep_id_from, node, ExplanationType.leaf)
         elif node in visited:
-            yield (depth, dep_id_from, node, "visited")
+            yield (depth, dep_id_from, node, ExplanationType.visited)
         else:
             visited.add(node)
             # We only need to pick one cause of conflict, we choose the one with minium
             # dependency splits.
             dep_id = min(successors, key=lambda id: len(successors[id]))
+
+            #
+            node_is_multi = (old_node is not None) and (
+                is_multi[graph.edges[(old_node, node)]["dependency_id"]]
+            )
+            if node_is_multi and (dep_id_from not in visited_multi):
+                visited_multi.add(dep_id_from)
+                yield (depth, dep_id_from, node, ExplanationType.multi_split)
+
             for s in successors[dep_id]:
-                to_visit.append((dep_id, node, s, depth + 1))
-            if old_node is None:
-                type = "single"
-            else:
-                type = "multi" if is_multi[graph.edges[(old_node, node)]["dependency_id"]] else "single"
-            yield (depth, dep_id_from, node, type)
+                to_visit.append((dep_id, node, s, depth + 1 + node_is_multi))
+
+            yield (
+                depth + node_is_multi,
+                dep_id_from,
+                node,
+                ExplanationType.multi_elem if node_is_multi else ExplanationType.single,
+            )
