@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import itertools
-from typing import Iterable, List, Sequence, TypeVar
+from typing import Callable, Iterable, Sequence, TypeVar
 
 import libmambapy
 import networkx as nx
@@ -103,30 +103,37 @@ def solvable_by_pkg_name(
     return out
 
 
-def package_same_name_edge(
+def pkg_same_name_pairs(
     problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]], symetric: bool = True
-) -> List[tuple[SolvableId, SolvableId]]:
-    out = [
+) -> set[tuple[SolvableId, SolvableId]]:
+    out = {
         (p.source_id, p.target_id)
         for p in problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME, [])
-    ]
+    }
     if symetric:
-        out += [(b, a) for (a, b) in out]
+        out = out.union({(b, a) for (a, b) in out})
     return out
 
 
-def compressable_solvable_graph(
-    graph: nx.DiGraph, nodes: Sequence[SolvableId], children: dict[SolvableId, set[SolvableId]]
+def pkg_nothing_provides_dep_id(
+    problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]]
+) -> dict[SolvableId, set[DependencyId]]:
+    out = {}
+    for p in problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP, []):
+        out.setdefault(p.source_id, set()).add(p.dep_id)
+    return out
+
+
+def compatibility_graph(
+    nodes: Sequence[SolvableId], compatible: Callable[[SolvableId, SolvableId], bool]
 ) -> nx.Graph:
-    compatibles = nx.Graph()
-    compatibles.add_nodes_from(nodes)
-    compatibles.add_edges_from(
-        (n1, n2) for n1, n2 in itertools.combinations(nodes, 2) if children[n1] == children[n2]
-    )
-    return compatibles
+    graph = nx.Graph()
+    graph.add_nodes_from(nodes)
+    graph.add_edges_from((n1, n2) for n1, n2 in itertools.combinations(nodes, 2) if compatible(n1, n2))
+    return graph
 
 
-def greedy_clique_partition(graph: nx.Graph) -> List[List[NodeType]]:
+def greedy_clique_partition(graph: nx.Graph) -> list[list[NodeType]]:
     graph = graph.copy()
     cliques = []
     while len(graph) > 0:
@@ -140,14 +147,24 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
     groups = SolvableGroups()
     counter = Counter()
 
-    # Add Conflicts edges to avoid merging the nodes
-    graph = pb_data.graph.copy()
-    graph.add_edges_from(package_same_name_edge(pb_data.problems_by_type))
+    pkg_same_name = pkg_same_name_pairs(pb_data.problems_by_type)
+    pkg_nothing_provides = pkg_nothing_provides_dep_id(pb_data.problems_by_type)
+
+    def same_children(n1: SolvableId, n2: SolvableId) -> bool:
+        return set(pb_data.graph.successors(n1)) == set(pb_data.graph.successors(n2))
+
+    def compatible(n1: SolvableId, n2: SolvableId) -> bool:
+        return (
+            # Packages must not be in conflict
+            ((n1, n2) not in pkg_same_name)
+            # Packages must have same missing dependencies (when that is the case)
+            and pkg_nothing_provides.get(n1) == pkg_nothing_provides.get(n2)
+            # Packages must have the same successors
+            and same_children(n1, n2)
+        )
 
     for solvs in solvable_by_pkg_name(pb_data.package_info).values():
-        cliques = greedy_clique_partition(
-            compressable_solvable_graph(graph, solvs, children={n: set(graph.successors(n)) for n in solvs})
-        )
+        cliques = greedy_clique_partition(compatibility_graph(solvs, compatible=compatible))
         for c in cliques:
             groups.set_solvables(counter(), c)
     return groups
