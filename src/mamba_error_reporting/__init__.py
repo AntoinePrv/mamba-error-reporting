@@ -1,6 +1,6 @@
 import importlib
 
-__all__ = ["algorithm", "analysis", "messaging", "problems"]
+__all__ = ["algorithm", "analysis", "color", "messaging", "problems"]
 
 
 def __getattr__(name: str):
