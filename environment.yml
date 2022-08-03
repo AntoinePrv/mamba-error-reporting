@@ -5,8 +5,7 @@ dependencies:
   - python
   - pip
   - mamba
-  # Need unreleased bindings
-  # - libmambapy>0.24
+  - libmambapy>=0.25
   # For analysis
   - pandas
   - numpy
