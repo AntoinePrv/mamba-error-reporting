@@ -115,11 +115,15 @@ def create_pubgrub_hard(missing_package: bool = False) -> tuple[libmambapy.Solve
         {"name": "dropdown", "version": "1.6.0", "dependencies": ["libicons=1.*", "intl=3.*"]},
         {"name": "pyicons", "version": "2.0.0", "dependencies": ["libicons=2.*"]},
         {"name": "pyicons", "version": "1.0.0", "dependencies": ["libicons=1.*"]},
+        {"name": "pretty", "version": "1.0.0", "dependencies": ["pyicons=1.0.*"]},
+        {"name": "pretty", "version": "1.0.1", "dependencies": ["pyicons=1.0.*"]},
         {"name": "intl", "version": "5.0.0"},
         {"name": "intl", "version": "4.0.0"},
         {"name": "intl", "version": "3.2.0"},
         {"name": "intl", "version": "3.1.0"},
         {"name": "intl", "version": "3.0.0"},
+        {"name": "intl-mod", "version": "1.0.0", "dependencies": ["intl=5.0.*"]},
+        {"name": "intl-mod", "version": "1.0.1", "dependencies": ["intl=5.0.*"]},
         {"name": "libicons", "version": "2.1.0"},
         {"name": "libicons", "version": "2.0.1"},
         {"name": "libicons", "version": "2.0.0"},
@@ -137,7 +141,7 @@ def create_pubgrub_hard(missing_package: bool = False) -> tuple[libmambapy.Solve
 
     return _create_problem_manual(
         packages=packages,
-        specs=["menu", "pyicons=1.*", "intl=5.*"],
+        specs=["menu", "pyicons=1.*", "intl=5.*", "intl-mod", "pretty>=1.0"],
     )
 
 
