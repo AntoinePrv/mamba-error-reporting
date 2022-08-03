@@ -219,48 +219,50 @@ def find_leaves(graph: nx.DiGraph, node: NodeType) -> list[NodeType]:
 class ExplanationType(enum.Enum):
     leaf = "leaf"
     visited = "visited"
-    multi_split = "multi_split"
-    multi_elem = "multi_elem"
-    single = "single"
+    split = "split"
+    diving = "diving"
 
 
 def explanation_path(
-    graph: nx.DiGraph, root: NodeType, visited: set[GroupId], is_multi: dict[GroupId, bool]
-) -> Iterable[int, DependencyId, GroupId, ExplanationType]:
+    graph: nx.DiGraph,
+    root: NodeType,
+    visited: set[GroupId],
+    is_multi: dict[GroupId, bool],
+    explore_all: bool = False,
+) -> Iterable[int, DependencyId, GroupId, ExplanationType, bool]:
     visited_multi = set()
     to_visit = [(None, None, root, 0)]
     while len(to_visit) > 0:
         dep_id_from, old_node, node, depth = to_visit.pop()
 
-        successors = {}
+        successors: dict[DependencyId, list[GroupId]] = {}
         for s in graph.successors(node):
             successors.setdefault(graph.edges[(node, s)]["dependency_id"], []).append(s)
 
+        # Check if the node is part of a dependency split by versions
+        node_is_in_split = (old_node is not None) and (
+            is_multi[graph.edges[(old_node, node)]["dependency_id"]]
+        )
+        # If the node is the first being visited in a version split
+        if node_is_in_split and (dep_id_from not in visited_multi):
+            visited_multi.add(dep_id_from)
+            yield (depth, dep_id_from, node, ExplanationType.split, node_is_in_split)
+        depth += node_is_in_split
+
         if len(successors) == 0:
             visited.add(node)
-            yield (depth, dep_id_from, node, ExplanationType.leaf)
+            yield (depth, dep_id_from, node, ExplanationType.leaf, node_is_in_split)
         elif node in visited:
-            yield (depth, dep_id_from, node, ExplanationType.visited)
+            yield (depth, dep_id_from, node, ExplanationType.visited, node_is_in_split)
         else:
             visited.add(node)
-            # We only need to pick one cause of conflict, we choose the one with minium
-            # dependency splits.
-            dep_id = min(successors, key=lambda id: len(successors[id]))
 
-            #
-            node_is_multi = (old_node is not None) and (
-                is_multi[graph.edges[(old_node, node)]["dependency_id"]]
-            )
-            if node_is_multi and (dep_id_from not in visited_multi):
-                visited_multi.add(dep_id_from)
-                yield (depth, dep_id_from, node, ExplanationType.multi_split)
+            if explore_all:
+                dep_ids = list(successors.keys())
+            else:
+                # If we only explore one dep_id, we choose the one with minimum splits
+                dep_ids = [min(successors, key=lambda id: len(successors[id]))]
 
-            for s in successors[dep_id]:
-                to_visit.append((dep_id, node, s, depth + 1 + node_is_multi))
+            to_visit += [(dep_id, node, s, depth + 1) for dep_id in dep_ids for s in successors[dep_id]]
 
-            yield (
-                depth + node_is_multi,
-                dep_id_from,
-                node,
-                ExplanationType.multi_elem if node_is_multi else ExplanationType.single,
-            )
+            yield (depth, dep_id_from, node, ExplanationType.diving, node_is_in_split)
