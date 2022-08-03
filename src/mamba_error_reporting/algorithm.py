@@ -186,6 +186,12 @@ def ancestors_subgraph(graph: nx.DiGraph, node: NodeType) -> nx.DiGraph:
     return nx.subgraph_view(graph, filter_node=lambda n: (n in ancestors))
 
 
+def successors_subgraph(graph: nx.DiGraph, node: NodeType) -> nx.DiGraph:
+    successors = set(nx.successors(graph, node))
+    successors.add(node)
+    return nx.subgraph_view(graph, filter_node=lambda n: (n in successors))
+
+
 def find_root(graph: nx.DiGraph, node: NodeType) -> NodeType:
     visited = set()
     while graph.in_degree(node) > 0:
@@ -194,6 +200,20 @@ def find_root(graph: nx.DiGraph, node: NodeType) -> NodeType:
         visited.add(node)
         node = next(graph.predecessors(node))
     return node
+
+
+def find_leaves(graph: nx.DiGraph, node: NodeType) -> list[NodeType]:
+    leaves = []
+    to_visit = [node]
+    visited = set()
+    while len(to_visit) > 0:
+        node = to_visit.pop()
+        visited.add(node)
+        if graph.out_degree(node) > 0:
+            to_visit += [n for n in graph.successors(node) if n not in visited]
+        else:
+            leaves.append(node)
+    return leaves
 
 
 class ExplanationType(enum.Enum):
