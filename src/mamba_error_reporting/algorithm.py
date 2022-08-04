@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import functools
 import itertools
-from typing import Callable, Iterable, Sequence, TypeVar
+from typing import Callable, Iterable, NewType, Sequence, TypeVar
 
 import libmambapy
 import networkx as nx
 
-DependencyId = int
-SolvableId = int
-GroupId = int
+DependencyId = NewType("DependencyId", int)
+SolvableId = NewType("SolvableId", int)
+GroupId = NewType("GroupId", int)
 NodeType = TypeVar("NodeType")
 EdgeType = TypeVar("EdgeType")
 
@@ -55,6 +56,11 @@ class ProblemData:
             elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_REQUIRES:
                 add_solvable(p.source_id)
                 add_dependency(p.source_id, p.dep_id, p.dep())
+            elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS:
+                # We do not add dependencies because they loop back to installed packages,
+                # making it difficut to explain problems in the graph.
+                add_solvable(p.source_id)
+                add_solvable(p.target_id)
             else:
                 if p.source() is not None:
                     add_solvable(p.source_id)
@@ -70,6 +76,28 @@ class ProblemData:
             package_info=package_info,
             problems_by_type=problems_by_type,
         )
+
+    @functools.cached_property
+    def pkg_conflicts(self) -> set[tuple[SolvableId, SolvableId]]:
+        out = {
+            (p.source_id, p.target_id)
+            for rule_info in (
+                libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME,
+                libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS,
+            )
+            for p in self.problems_by_type.get(rule_info, [])
+        }
+        out = out.union({(b, a) for (a, b) in out})
+        return out
+
+    @functools.cached_property
+    def pkg_nothing_provides(self) -> dict[SolvableId, set[DependencyId]]:
+        out = {}
+        for p in self.problems_by_type.get(
+            libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP, []
+        ):
+            out.setdefault(p.source_id, set()).add(p.dep_id)
+        return out
 
 
 @dataclasses.dataclass
@@ -103,27 +131,6 @@ def solvable_by_pkg_name(
     return out
 
 
-def pkg_same_name_pairs(
-    problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]], symetric: bool = True
-) -> set[tuple[SolvableId, SolvableId]]:
-    out = {
-        (p.source_id, p.target_id)
-        for p in problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME, [])
-    }
-    if symetric:
-        out = out.union({(b, a) for (a, b) in out})
-    return out
-
-
-def pkg_nothing_provides_dep_id(
-    problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]]
-) -> dict[SolvableId, set[DependencyId]]:
-    out = {}
-    for p in problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP, []):
-        out.setdefault(p.source_id, set()).add(p.dep_id)
-    return out
-
-
 def compatibility_graph(
     nodes: Sequence[SolvableId], compatible: Callable[[SolvableId, SolvableId], bool]
 ) -> nx.Graph:
@@ -144,24 +151,21 @@ def greedy_clique_partition(graph: nx.Graph) -> list[list[NodeType]]:
 
 
 def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
-    groups = SolvableGroups()
-    counter = Counter()
-
-    pkg_same_name = pkg_same_name_pairs(pb_data.problems_by_type)
-    pkg_nothing_provides = pkg_nothing_provides_dep_id(pb_data.problems_by_type)
-
     def same_children(n1: SolvableId, n2: SolvableId) -> bool:
         return set(pb_data.graph.successors(n1)) == set(pb_data.graph.successors(n2))
 
     def compatible(n1: SolvableId, n2: SolvableId) -> bool:
         return (
             # Packages must not be in conflict
-            ((n1, n2) not in pkg_same_name)
+            ((n1, n2) not in pb_data.pkg_conflicts)
             # Packages must have same missing dependencies (when that is the case)
-            and pkg_nothing_provides.get(n1) == pkg_nothing_provides.get(n2)
+            and pb_data.pkg_nothing_provides.get(n1) == pb_data.pkg_nothing_provides.get(n2)
             # Packages must have the same successors
             and same_children(n1, n2)
         )
+
+    groups = SolvableGroups()
+    counter = Counter()
 
     for solvs in solvable_by_pkg_name(pb_data.package_info).values():
         cliques = greedy_clique_partition(compatibility_graph(solvs, compatible=compatible))
