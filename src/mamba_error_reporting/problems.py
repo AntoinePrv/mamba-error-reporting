@@ -149,20 +149,33 @@ def create_pubgrub_missing() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_pubgrub_hard(True)
 
 
-def create_conda_forge(specs: Sequence[str]) -> tuple[libmambapy.Solver, libmambapy.Pool]:
-    repos = []
+def create_conda_forge(
+    specs: Sequence[str],
+    glibc: str | None = "2.17.0",
+    cuda: str | None = None,
+) -> tuple[libmambapy.Solver, libmambapy.Pool]:
     pool = libmambapy.Pool()
-    channels = ["conda-forge"]
-    mamba.utils.load_channels(pool, channels, repos, prepend=False, platform="linux-64")
+    prefix_data = libmambapy.PrefixData(libmambapy.Path(str(tempfile.TemporaryDirectory())))
+    virtual_pkgs = []
+    if glibc is not None:
+        virtual_pkgs.append(libmambapy.PackageInfo("__glibc", glibc, "", 0))
+    if cuda is not None:
+        virtual_pkgs.append(libmambapy.PackageInfo("__cuda", cuda, "", 0))
+    prefix_data.add_packages(virtual_pkgs)
+    repo = libmambapy.Repo(pool, prefix_data)
+    repo.set_installed()
+    mamba.utils.load_channels(pool, ["conda-forge"], [repo], prepend=False, platform="linux-64")
     solver_options = [(libmambapy.SOLVER_FLAG_ALLOW_DOWNGRADE, 1)]
     solver = libmambapy.Solver(pool, solver_options)
     solver.add_jobs(specs, libmambapy.SOLVER_INSTALL)
     return solver, pool
 
 
-def create_pytorch() -> tuple[libmambapy.Solver, libmambapy.Pool]:
-    return create_conda_forge(["python=2.7", "pytorch"])
+def create_pytorch_cpu() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    return create_conda_forge(["python=2.7", "pytorch"], cuda=None)
 
+def create_pytorch_cuda() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    return create_conda_forge(["python=2.7", "pytorch"], cuda="10.2.0")
 
 def create_r_base() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"])
