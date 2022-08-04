@@ -26,21 +26,20 @@ def _create_package(
     }
 
 
-def _create_repodata(directory: Union[str, pathlib.Path], packages: Sequence[str]) -> None:
+def _create_repodata(directory: Union[str, pathlib.Path], packages: Sequence[dict[str, Any]]) -> None:
     dierctory = pathlib.Path(directory)
     (dierctory / "noarch").mkdir()
     repodata_file = dierctory / "noarch" / "repodata.json"
-    repodata = {}
-    repodata["packages"] = {}
-    for p in packages:
-        repodata["packages"][f"{p['name']}-{p['version']}-{p['build_string']}.tar.bz2"] = p
+    repodata: dict[str, dict[str, str]] = {
+        "packages": {f"{p['name']}-{p['version']}-{p['build_string']}.tar.bz2": p for p in packages}
+    }
     repodata_file.write_text(json.dumps(repodata))
 
 
 def _create_problem_manual(
     packages: Sequence[dict[str, Any]], specs: Sequence[str]
 ) -> tuple[libmambapy.Solver, libmambapy.Pool]:
-    repos = []
+    repos: list[str] = []
     pool = libmambapy.Pool()
 
     with tempfile.TemporaryDirectory() as dir:
@@ -70,6 +69,10 @@ def create_basic_conflict() -> tuple[libmambapy.Solver, libmambapy.Pool]:
 
 
 def create_pubgrub() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    """Create the PubGrub blog post example.
+
+    The example given by Natalie Weizenbaum (credits https://nex3.medium.com/pubgrub-2fb6470504f).
+    """
     return _create_problem_manual(
         packages=[
             {"name": "menu", "version": "1.5.0", "dependencies": ["dropdown=2.*"]},
@@ -94,7 +97,7 @@ def create_pubgrub() -> tuple[libmambapy.Solver, libmambapy.Pool]:
 
 
 def create_pubgrub_hard(missing_package: bool = False) -> tuple[libmambapy.Solver, libmambapy.Pool]:
-    packages = [
+    packages: list[dict[str, Any]] = [
         {"name": "menu", "version": "2.1.0", "dependencies": ["dropdown>=2.1", "emoji"]},
         {"name": "menu", "version": "2.0.1", "dependencies": ["dropdown>=2", "emoji"]},
         {"name": "menu", "version": "2.0.0", "dependencies": ["dropdown>=2", "emoji"]},
@@ -174,8 +177,10 @@ def create_conda_forge(
 def create_pytorch_cpu() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["python=2.7", "pytorch"], cuda=None)
 
+
 def create_pytorch_cuda() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["python=2.7", "pytorch"], cuda="10.2.0")
+
 
 def create_r_base() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"])
