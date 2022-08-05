@@ -55,24 +55,15 @@ class ProblemData:
             problems_by_type.setdefault(p.type, []).append(p)
 
             # Root dependencies are in JOB with source not useful (except 0)
-            if p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB:
-                if p.source_id == 0:
-                    add_solvable(0, libmambapy.PackageInfo("problem", "", "", 0))
-                    add_dependency(0, p.dep_id, p.dep())
-                else:
-                    # FIXME hope that's not taken
-                    add_solvable(-1, libmambapy.PackageInfo("installed", "", "", 0))
-                    add_dependency(-1, p.dep_id, p.dep())
-            elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_REQUIRES:
-                add_solvable(p.source_id)
-                add_dependency(p.source_id, p.dep_id, p.dep())
-            elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS:
-                add_solvable(p.source_id)
-                add_solvable(p.target_id)
-                add_dependency(p.source_id, p.dep_id, p.dep())
+            if (p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB) and (p.source() is not None):
+                # FIXME hope -1 is not taken
+                add_solvable(-1, libmambapy.PackageInfo("installed", "", "", 0))
+                add_dependency(-1, p.dep_id, p.dep())
             else:
                 if p.source() is not None:
                     add_solvable(p.source_id)
+                else:
+                    add_solvable(0, libmambapy.PackageInfo("problem", "", "", 0))
                 if p.target() is not None:
                     add_solvable(p.target_id)
                 if p.dep() is not None:
@@ -201,12 +192,13 @@ class CompressionData:
 
 def compress_graph(pb_data: ProblemData) -> CompressionData:
     groups = compress_solvables(pb_data)
-    compressed_graph = nx.DiGraph()
-    compressed_graph.add_edges_from(
+    graph = nx.DiGraph()
+    graph.add_nodes_from(groups.group_to_solv.keys())
+    graph.add_edges_from(
         (groups.solv_to_group[a], groups.solv_to_group[b], attr)
         for (a, b), attr in pb_data.graph.edges.items()
     )
-    return CompressionData(graph=compressed_graph, groups=groups)
+    return CompressionData(graph=graph, groups=groups)
 
 
 ############################
