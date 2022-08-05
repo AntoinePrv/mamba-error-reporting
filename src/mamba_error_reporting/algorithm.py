@@ -28,6 +28,7 @@ EdgeType = TypeVar("EdgeType")
 class ProblemData:
     problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]]
     dependency_names: dict[DependencyId, str]
+    dependency_solvables: dict[DependencyId, list[SolvableId]]
     package_info: dict[SolvableId, libmambapy.PackageInfo]
     graph: nx.DiGraph
 
@@ -35,6 +36,7 @@ class ProblemData:
     def from_libsolv(solver: libmambapy.Solver, pool: libmambapy.Pool) -> ProblemData:
         graph = nx.DiGraph()
         dependency_names = {}
+        dependency_solvables = {}
         package_info = {}
         problems_by_type = {}
 
@@ -44,8 +46,8 @@ class ProblemData:
 
         def add_dependency(source_id, dep_id, dep_name):
             dependency_names[p.dep_id] = dep_name
-            solvs = pool.select_solvables(dep_id)
-            for s in solvs:
+            dependency_solvables[dep_id] = pool.select_solvables(dep_id)
+            for s in dependency_solvables[dep_id]:
                 add_solvable(s, pool.id2pkginfo(s))
                 graph.add_edge(source_id, s, dependency_id=dep_id)
 
@@ -65,10 +67,9 @@ class ProblemData:
                 add_solvable(p.source_id)
                 add_dependency(p.source_id, p.dep_id, p.dep())
             elif p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS:
-                # We do not add dependencies because they loop back to installed packages,
-                # making it difficut to explain problems in the graph.
                 add_solvable(p.source_id)
                 add_solvable(p.target_id)
+                add_dependency(p.source_id, p.dep_id, p.dep())
             else:
                 if p.source() is not None:
                     add_solvable(p.source_id)
@@ -81,21 +82,28 @@ class ProblemData:
         return ProblemData(
             graph=graph,
             dependency_names=dependency_names,
+            dependency_solvables=dependency_solvables,
             package_info=package_info,
             problems_by_type=problems_by_type,
         )
 
     @functools.cached_property
     def package_conflicts(self) -> set[tuple[SolvableId, SolvableId]]:
+        # PKG_SAME_NAME are in direct conflict
         out = {
             (p.source_id, p.target_id)
-            for rule_info in (
-                libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME,
-                libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS,
-            )
-            for p in self.problems_by_type.get(rule_info, [])
+            for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME, [])
         }
-        out = out.union({(b, a) for (a, b) in out})
+        # PKG_CONSTRAINS are in conlfict with resolved dependency solvables
+        out.update(
+            {
+                (p.target_id, s)
+                for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS, [])
+                for s in self.dependency_solvables[p.dep_id]
+            }
+        )
+        # Make the output symetric
+        out.update({(b, a) for (a, b) in out})
         return out
 
     @functools.cached_property
@@ -447,7 +455,7 @@ class ProblemExplainer(Explainer):
             conflict_name = self.names.group_name(conflict_id)
             return message + (
                 " cannot be installed because it" if self.depth <= 1 else ", which",
-                f" conflicts with any possible versions of {self.color.unavailable(conflict_name)}",
+                f" conflicts with any installable versions of {self.color.unavailable(conflict_name)}",
             )
         elif self.leaf_descriptor.leaf_has_problem(self.group_id):
             missing_dep_id = self.leaf_descriptor.leaf_problem(self.group_id)
