@@ -332,21 +332,31 @@ class Names:
         return self.pb_data.package_info[sample_solv_id].name
 
     def group_versions(self, group_id: GroupId) -> list[str]:
-        return list(
-            set([self.pb_data.package_info[s].version for s in self.cp_data.groups.group_to_solv[group_id]])
+        unique_versions = set(
+            [self.pb_data.package_info[s].version for s in self.cp_data.groups.group_to_solv[group_id]]
         )
+        return sorted(unique_versions, key=packaging.version.parse)
 
     def group_versions_trunc(
-        self, group_id: GroupId, trunc_threshold: int = 5, trunc_show: int = 2, trunc_str: str = "..."
-    ) -> list[str]:
+        self,
+        group_id: GroupId,
+        trunc_threshold: int = 5,
+        trunc_show: int = 2,
+        trunc_sep: str = "...",
+        split_sep: str = "|",
+    ) -> str:
         versions = self.group_versions(group_id)
         if len(versions) > trunc_threshold:
-            return versions[:trunc_show] + [trunc_str] + versions[-trunc_show:]
-        return versions
+            versions = versions[:trunc_show] + [trunc_sep] + versions[-trunc_show:]
+        return split_sep.join(versions)
 
-    def group_versions_range(self, group_id: GroupId, range_sep: str = "->") -> list[str]:
-        parsed_versions = [packaging.version.parse(v) for v in self.group_versions(group_id)]
-        return [str(min(parsed_versions)), range_sep, str(max(parsed_versions))]
+    def group_versions_range(
+        self, group_id: GroupId, threshold: int = 5, range_sep: str = "->", split_sep: str = "|"
+    ) -> str:
+        versions = self.group_versions(group_id)
+        if len(versions) >= threshold:
+            return f"{versions[0]}{range_sep}{versions[-1]}"
+        return split_sep.join(versions)
 
     def dependency_name(self, dep_id: DependencyId) -> str:
         return self.pb_data.dependency_names[dep_id]
@@ -437,7 +447,7 @@ class Explainer:
     def pkg_repr(self) -> str:
         if self.node_is_in_split:
             return "{name} [{versions}]".format(
-                name=self.pkg_name, versions="|".join(self.names.group_versions_trunc(self.group_id))
+                name=self.pkg_name, versions=self.names.group_versions_trunc(self.group_id)
             )
         return self.dep_name
 

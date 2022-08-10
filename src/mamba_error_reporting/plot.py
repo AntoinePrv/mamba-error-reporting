@@ -4,7 +4,6 @@ from typing import TypeVar
 import libmambapy
 import matplotlib.pyplot as plt
 import networkx as nx
-import packaging.version
 
 import mamba_error_reporting as mer
 
@@ -52,18 +51,12 @@ def plot_solvable_dag(pb_data: mer.algorithm.ProblemData) -> None:
 
 
 def plot_group_dag(pb_data: mer.algorithm.ProblemData, cp_data: mer.algorithm.CompressionData) -> None:
-    node_labels = {}
-    for n in cp_data.graph.nodes:
-        solvs = [pb_data.package_info.get(s) for s in cp_data.groups.group_to_solv[n]]
-        name = next(iter(solvs)).name
-        versions = {p.version for p in solvs}
-        versions = sorted(versions, key=packaging.version.parse)
-        # Truncate versions too long
-        if len(versions) > 5:
-            versions = versions[:2] + ["..."] + versions[-1:]
-        node_labels[n] = f"{name}-(" + "|".join(versions) + ")"
-
-    edge_labels = {
-        e: pb_data.dependency_names[attr["dependency_id"]] for e, attr in cp_data.graph.edges.items()
+    names = mer.algorithm.Names(pb_data=pb_data, cp_data=cp_data)
+    node_labels = {
+        group_id: "{name}-[{versions}]".format(
+            name=names.group_name(group_id),
+            versions=names.group_versions_trunc(group_id),
+        )
+        for group_id in cp_data.graph.nodes
     }
     plot_dag(cp_data.graph, node_labels=node_labels, edge_labels=edge_labels)
