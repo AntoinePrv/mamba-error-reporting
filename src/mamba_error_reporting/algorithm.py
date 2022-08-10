@@ -196,11 +196,14 @@ class CompressionData:
 def compress_graph(pb_data: ProblemData) -> CompressionData:
     groups = compress_solvables(pb_data)
     graph = nx.DiGraph()
+    # Add all nodes even if they don't have edges
     graph.add_nodes_from(groups.group_to_solv.keys())
-    graph.add_edges_from(
-        (groups.solv_to_group[a], groups.solv_to_group[b], attr)
-        for (a, b), attr in pb_data.graph.edges.items()
-    )
+    # Add edges and group dependency ids
+    for (a, b), attr in pb_data.graph.edges.items():
+        grp_a, grp_b = groups.solv_to_group[a], groups.solv_to_group[b]
+        if not graph.has_edge(grp_a, grp_b):
+            graph.add_edge(grp_a, grp_b, dependency_ids=set())
+        graph.edges[(grp_a, grp_b)]["dependency_ids"].add(attr["dependency_id"])
     return CompressionData(graph=graph, groups=groups)
 
 
@@ -279,12 +282,13 @@ def explanation_path(
 
         successors: dict[DependencyId, list[GroupId]] = {}
         for s in graph.successors(node):
-            successors.setdefault(graph.edges[(node, s)]["dependency_id"], []).append(s)
+            # A group can be a successor of multiple dep_id, even for a single node
+            for dep_id in graph.edges[(node, s)]["dependency_ids"]:
+                successors.setdefault(dep_id, []).append(s)
 
         # Check if the node is part of a dependency split by versions
-        node_is_in_split = (old_node is not None) and (
-            is_multi[graph.edges[(old_node, node)]["dependency_id"]]
-        )
+        node_is_in_split = (old_node is not None) and is_multi[dep_id_from]
+
         # If the node is the first being visited in a version split
         if node_is_in_split and (dep_id_from not in visited_multi):
             visited_multi.add(dep_id_from)
@@ -531,14 +535,15 @@ class InstallExplainer(Explainer):
 def make_dep_id_to_groups(graph: nx.DiGraph) -> dict[DependencyId, set[GroupId]]:
     groups: dict[DependencyId, set[GroupId]] = {}
     for (_, s), attr in graph.edges.items():
-        groups.setdefault(attr["dependency_id"], set()).add(s)
+        for d in attr["dependency_ids"]:
+            groups.setdefault(d, set()).add(s)
     return groups
 
 
 def header_message(pb_data: ProblemData, color: type = Color) -> str | None:
-    deps = set()
-    for e in pb_data.graph.out_edges(0):
-        deps.add(pb_data.dependency_names[pb_data.graph.edges[e]["dependency_id"]])
+    deps = {
+        pb_data.dependency_names[pb_data.graph.edges[e]["dependency_id"]] for e in pb_data.graph.out_edges(0)
+    }
     if len(deps) == 0:
         return None
     return "Could not find any installable versions for requested package{s} {pkgs}.".format(
