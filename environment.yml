@@ -22,4 +22,3 @@ dependencies:
     - pyflakes
     - flake8
     - python-lsp-black
-    - python-lsp-rope
