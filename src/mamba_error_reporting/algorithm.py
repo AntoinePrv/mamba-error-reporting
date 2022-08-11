@@ -55,7 +55,11 @@ class ProblemData:
             problems_by_type.setdefault(p.type, []).append(p)
 
             # Root dependencies are in JOB with source and target not useful (except 0)
-            if (p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB):
+            job_rules = [
+                libmambapy.SolverRuleinfo.SOLVER_RULE_JOB,
+                libmambapy.SolverRuleinfo.SOLVER_RULE_JOB_NOTHING_PROVIDES_DEP,
+            ]
+            if p.type in job_rules:
                 # FIXME hope -1 is not taken
                 source_id = 0 if p.source() is None else -1
                 add_solvable(source_id, libmambapy.PackageInfo(f"root-{source_id}", "", "", 0))
@@ -77,38 +81,40 @@ class ProblemData:
             problems_by_type=problems_by_type,
         )
 
+    @property
+    def problems(self) -> Iterable[libmambapy.PackageInfo]:
+        return itertools.chain.from_iterable(self.problems_by_type.values())
+
     @functools.cached_property
     def package_conflicts(self) -> set[tuple[SolvableId, SolvableId]]:
         # PKG_SAME_NAME are in direct conflict
-        out = {
-            (p.source_id, p.target_id)
-            for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME, [])
-        }
-        for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS, []):
-            solvs = self.dependency_solvables[p.dep_id]
-            # Writting PKG_CONSTRAINS as in conlfict with resolved dependency solvables
-            # yields better strucutre (pkg in conflicts have the same name)
-            if len(solvs) > 1:
-                out.update({(p.target_id, s) for s in solvs})
-            # However sometimes there are no such pacakges (e.g. with virtual pacakges) so we
-            # use target_id to avoid dropping the conflict
-            else:
-                out.add((p.source_id, p.target_id))
+        name_rule = libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME
+        out = {(p.source_id, p.target_id) for p in self.problems_by_type.get(name_rule, [])}
+        # PKG_CONSTRAINS are in conlfict with resolved dependency solvables.
+        # See package_missing for cases where the solvables resolves to an empty list.
+        cons_rule = libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS
+        out.update(
+            {
+                (p.target_id, s)
+                for p in self.problems_by_type.get(cons_rule, [])
+                for s in self.dependency_solvables[p.dep_id]
+            }
+        )
         # Make the output symetric
         out.update({(b, a) for (a, b) in out})
         return out
 
     @functools.cached_property
     def package_missing(self) -> dict[SolvableId, set[DependencyId]]:
-        nothing_rules = [
-            libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP,
-            libmambapy.SolverRuleinfo.SOLVER_RULE_JOB_NOTHING_PROVIDES_DEP,
-        ]
+        """return packages that have a dependency with an empty set solvables."""
+        # This include PKG_CONSTRAINS type of conlicts, likely a virtual package in that case.
+        # It's not perfect but it deeply simplify their handling.
         out = {}
-        for rule in nothing_rules:
-            for p in self.problems_by_type.get(rule, []):
+        for p in self.problems:
+            if (p.dep_id in self.dependency_solvables) and len(self.dependency_solvables[p.dep_id]) == 0:
                 out.setdefault(p.source_id, set()).add(p.dep_id)
         return out
+
 
     @functools.cached_property
     def solvable_by_package_name(self) -> dict[str, set[SolvableId]]:
@@ -500,7 +506,7 @@ class InstallExplainer(Explainer):
             missing_dep_name = self.names.dependency_name(missing_dep_id)
             return (
                 self.pkg_repr,
-                ", which requires the non-existent package ",
+                ", which requires the missing package ",
                 self.color.unavailable(missing_dep_name),
             )
         return (
