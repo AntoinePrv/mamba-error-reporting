@@ -54,16 +54,15 @@ class ProblemData:
         for p in solver.all_problems_structured():
             problems_by_type.setdefault(p.type, []).append(p)
 
-            # Root dependencies are in JOB with source not useful (except 0)
-            if (p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB) and (p.source() is not None):
+            # Root dependencies are in JOB with source and target not useful (except 0)
+            if (p.type == libmambapy.SolverRuleinfo.SOLVER_RULE_JOB):
                 # FIXME hope -1 is not taken
-                add_solvable(-1, libmambapy.PackageInfo("installed", "", "", 0))
-                add_dependency(-1, p.dep_id, p.dep())
+                source_id = 0 if p.source() is None else -1
+                add_solvable(source_id, libmambapy.PackageInfo(f"root-{source_id}", "", "", 0))
+                add_dependency(source_id, p.dep_id, p.dep())
             else:
                 if p.source() is not None:
                     add_solvable(p.source_id)
-                else:
-                    add_solvable(0, libmambapy.PackageInfo("problem", "", "", 0))
                 if p.target() is not None:
                     add_solvable(p.target_id)
                 if p.dep() is not None:
