@@ -84,14 +84,16 @@ class ProblemData:
             (p.source_id, p.target_id)
             for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_SAME_NAME, [])
         }
-        # PKG_CONSTRAINS are in conlfict with resolved dependency solvables
-        out.update(
-            {
-                (p.target_id, s)
-                for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS, [])
-                for s in self.dependency_solvables[p.dep_id]
-            }
-        )
+        for p in self.problems_by_type.get(libmambapy.SolverRuleinfo.SOLVER_RULE_PKG_CONSTRAINS, []):
+            solvs = self.dependency_solvables[p.dep_id]
+            # Writting PKG_CONSTRAINS as in conlfict with resolved dependency solvables
+            # yields better strucutre (pkg in conflicts have the same name)
+            if len(solvs) > 1:
+                out.update({(p.target_id, s) for s in solvs})
+            # However sometimes there are no such pacakges (e.g. with virtual pacakges) so we
+            # use target_id to avoid dropping the conflict
+            else:
+                out.add((p.source_id, p.target_id))
         # Make the output symetric
         out.update({(b, a) for (a, b) in out})
         return out
@@ -353,16 +355,18 @@ class LeafDescriptor:
     cp_data: CompressionData
 
     @functools.cached_property
-    def conflicting_groups(self) -> dict[GroupId, GroupId]:
-        return {
-            self.cp_data.groups.solv_to_group[s1]: self.cp_data.groups.solv_to_group[s2]
-            for s1, s2 in self.pb_data.package_conflicts
-        }
+    def conflicting_groups(self) -> dict[GroupId, set[GroupId]]:
+        out = {}
+        for s1, s2 in self.pb_data.package_conflicts:
+            g1 = self.cp_data.groups.solv_to_group[s1]
+            g2 = self.cp_data.groups.solv_to_group[s2]
+            out.setdefault(g1, set()).add(g2)
+        return out
 
     def leaf_has_conflict(self, group_id: GroupId) -> bool:
         return group_id in self.conflicting_groups
 
-    def leaf_conflict(self, group_id: GroupId) -> GroupId:
+    def leaf_conflict(self, group_id: GroupId) -> set[GroupId]:
         return self.conflicting_groups[group_id]
 
     @functools.cached_property
@@ -459,13 +463,9 @@ class ProblemExplainer(Explainer):
 
     def explain_leaf(self) -> tuple[str]:
         if self.leaf_descriptor.leaf_has_conflict(self.group_id):
-            conflict_id = self.leaf_descriptor.leaf_conflict(self.group_id)
-            conflict_name = self.names.group_name(conflict_id)
-            return (
-                self.pkg_repr,
-                ", which conflicts with any installable versions of ",
-                self.color.unavailable(conflict_name),
-            )
+            conflict_ids = self.leaf_descriptor.leaf_conflict(self.group_id)
+            conflict_names = ", ".join(self.color.unavailable(self.names.group_name(g)) for g in conflict_ids)
+            return (self.pkg_repr, ", which conflicts with any installable versions of ", conflict_names)
         elif self.leaf_descriptor.leaf_has_problem(self.group_id):
             missing_dep_id = self.leaf_descriptor.leaf_problem(self.group_id)
             missing_dep_name = self.names.dependency_name(missing_dep_id)
