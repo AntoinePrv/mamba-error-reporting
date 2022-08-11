@@ -341,26 +341,8 @@ class Names:
         )
         return sorted(unique_versions, key=packaging.version.parse)
 
-    def group_versions_trunc(
-        self,
-        group_id: GroupId,
-        trunc_threshold: int = 5,
-        trunc_show: int = 2,
-        trunc_sep: str = "...",
-        split_sep: str = "|",
-    ) -> str:
-        versions = self.group_versions(group_id)
-        if len(versions) > trunc_threshold:
-            versions = versions[:trunc_show] + [trunc_sep] + versions[-trunc_show:]
-        return split_sep.join(versions)
-
-    def group_versions_range(
-        self, group_id: GroupId, threshold: int = 5, range_sep: str = "->", split_sep: str = "|"
-    ) -> str:
-        versions = self.group_versions(group_id)
-        if len(versions) >= threshold:
-            return f"{versions[0]}{range_sep}{versions[-1]}"
-        return split_sep.join(versions)
+    def group_versions_trunc(self, group_id: GroupId) -> str:
+        return mer.utils.repr_trunc(self.group_versions(group_id), sep="|")
 
     def dependency_name(self, dep_id: DependencyId) -> str:
         return self.pb_data.dependency_names[dep_id]
