@@ -55,7 +55,7 @@ def plot_group_dag(pb_data: mer.algorithm.ProblemData, cp_data: mer.algorithm.Co
     node_labels = {
         group_id: "{name}-[{versions}]".format(
             name=names.group_name(group_id),
-            versions=names.group_versions_trunc(group_id),
+            versions=names.solv_group_versions_trunc(group_id),
         )
         for group_id in cp_data.graph.nodes
     }

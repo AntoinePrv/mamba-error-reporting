@@ -14,7 +14,7 @@ import mamba_error_reporting as mer
 
 DependencyId = NewType("DependencyId", int)
 SolvableId = NewType("SolvableId", int)
-GroupId = NewType("GroupId", int)
+SolvableGroupId = NewType("SolvableGroupId", int)
 NodeType = TypeVar("NodeType")
 EdgeType = TypeVar("EdgeType")
 
@@ -115,7 +115,6 @@ class ProblemData:
                 out.setdefault(p.source_id, set()).add(p.dep_id)
         return out
 
-
     @functools.cached_property
     def solvable_by_package_name(self) -> dict[str, set[SolvableId]]:
         out = {}
@@ -141,14 +140,16 @@ class Counter:
 
 @dataclasses.dataclass
 class SolvableGroups:
-    solv_to_group: dict[SolvableId, GroupId] = dataclasses.field(default_factory=dict)
-    group_to_solv: dict[GroupId, set[SolvableId]] = dataclasses.field(default_factory=dict)
+    solv_to_group: dict[SolvableId, SolvableGroupId] = dataclasses.field(default_factory=dict)
+    group_to_solv: dict[SolvableGroupId, set[SolvableId]] = dataclasses.field(default_factory=dict)
 
-    def set_solvables(self, group_id: GroupId, solvs: Sequence[SolvableId]) -> None:
-        for s in self.group_to_solv.get(group_id, set()):
-            del self.solv_to_group[s]
-        self.solv_to_group.update({s: group_id for s in solvs})
-        self.group_to_solv[group_id] = set(solvs)
+    group_counter: Counter = dataclasses.field(default_factory=Counter, init=False)
+
+    def add(self, solvs: Sequence[SolvableId]) -> SolvableGroupId:
+        grp_id = self.group_counter()
+        self.solv_to_group.update({s: grp_id for s in solvs})
+        self.group_to_solv[grp_id] = set(solvs)
+        return grp_id
 
 
 def compatibility_graph(
@@ -185,19 +186,18 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
         )
 
     groups = SolvableGroups()
-    counter = Counter()
 
     for solvs in pb_data.solvable_by_package_name.values():
         cliques = greedy_clique_partition(compatibility_graph(solvs, compatible=compatible))
         for c in cliques:
-            groups.set_solvables(counter(), c)
+            groups.add(c)
     return groups
 
 
 @dataclasses.dataclass
 class CompressionData:
     graph: nx.DiGraph
-    groups: SolvableGroups
+    solv_groups: SolvableGroups
 
 
 def compress_graph(pb_data: ProblemData) -> CompressionData:
@@ -211,7 +211,7 @@ def compress_graph(pb_data: ProblemData) -> CompressionData:
         if not graph.has_edge(grp_a, grp_b):
             graph.add_edge(grp_a, grp_b, dependency_ids=set())
         graph.edges[(grp_a, grp_b)]["dependency_ids"].add(attr["dependency_id"])
-    return CompressionData(graph=graph, groups=groups)
+    return CompressionData(graph=graph, solv_groups=groups)
 
 
 ############################
@@ -278,16 +278,16 @@ class ExplanationType(enum.Enum):
 def explanation_path(
     graph: nx.DiGraph,
     root: NodeType,
-    visited: set[GroupId],
-    is_multi: dict[GroupId, bool],
+    visited: set[SolvableGroupId],
+    is_multi: dict[SolvableGroupId, bool],
     explore_all: bool = False,
-) -> Iterable[int, DependencyId, GroupId, ExplanationType, bool]:
+) -> Iterable[int, DependencyId, SolvableGroupId, ExplanationType, bool]:
     visited_multi = set()
     to_visit = [(None, None, root, 0)]
     while len(to_visit) > 0:
         dep_id_from, old_node, node, depth = to_visit.pop()
 
-        successors: dict[DependencyId, list[GroupId]] = {}
+        successors: dict[DependencyId, list[SolvableGroupId]] = {}
         for s in graph.successors(node):
             # A group can be a successor of multiple dep_id, even for a single node
             for dep_id in graph.edges[(node, s)]["dependency_ids"]:
@@ -338,18 +338,18 @@ class Names:
     pb_data: ProblemData
     cp_data: CompressionData
 
-    def group_name(self, group_id: GroupId) -> str:
-        sample_solv_id = next(iter(self.cp_data.groups.group_to_solv[group_id]))
+    def solv_group_name(self, solv_grp_id: SolvableGroupId) -> str:
+        sample_solv_id = next(iter(self.cp_data.solv_groups.group_to_solv[solv_grp_id]))
         return self.pb_data.package_info[sample_solv_id].name
 
-    def group_versions(self, group_id: GroupId) -> list[str]:
+    def solv_group_versions(self, solv_grp_id: SolvableGroupId) -> list[str]:
         unique_versions = set(
-            [self.pb_data.package_info[s].version for s in self.cp_data.groups.group_to_solv[group_id]]
+            [self.pb_data.package_info[s].version for s in self.cp_data.solv_groups.group_to_solv[solv_grp_id]]
         )
         return sorted(unique_versions, key=packaging.version.parse)
 
-    def group_versions_trunc(self, group_id: GroupId) -> str:
-        return mer.utils.repr_trunc(self.group_versions(group_id), sep="|")
+    def solv_group_versions_trunc(self, solv_grp_id: SolvableGroupId) -> str:
+        return mer.utils.repr_trunc(self.solv_group_versions(solv_grp_id), sep="|")
 
     def dependency_name(self, dep_id: DependencyId) -> str:
         return self.pb_data.dependency_names[dep_id]
@@ -361,33 +361,33 @@ class LeafDescriptor:
     cp_data: CompressionData
 
     @functools.cached_property
-    def conflicting_groups(self) -> dict[GroupId, set[GroupId]]:
+    def conflicting_groups(self) -> dict[SolvableGroupId, set[SolvableGroupId]]:
         out = {}
         for s1, s2 in self.pb_data.package_conflicts:
-            g1 = self.cp_data.groups.solv_to_group[s1]
-            g2 = self.cp_data.groups.solv_to_group[s2]
+            g1 = self.cp_data.solv_groups.solv_to_group[s1]
+            g2 = self.cp_data.solv_groups.solv_to_group[s2]
             out.setdefault(g1, set()).add(g2)
         return out
 
-    def leaf_has_conflict(self, group_id: GroupId) -> bool:
-        return group_id in self.conflicting_groups
+    def leaf_has_conflict(self, solv_grp_id: SolvableGroupId) -> bool:
+        return solv_grp_id in self.conflicting_groups
 
-    def leaf_conflict(self, group_id: GroupId) -> set[GroupId]:
-        return self.conflicting_groups[group_id]
+    def leaf_conflict(self, solv_grp_id: SolvableGroupId) -> set[SolvableGroupId]:
+        return self.conflicting_groups[solv_grp_id]
 
     @functools.cached_property
-    def nothing_provides_groups(self) -> dict[GroupId, set[DependencyId]]:
+    def nothing_provides_groups(self) -> dict[SolvableGroupId, set[DependencyId]]:
         out = {}
         for solv_id, dep_ids in self.pb_data.package_missing.items():
-            out.setdefault(self.cp_data.groups.solv_to_group[solv_id], set()).update(dep_ids)
+            out.setdefault(self.cp_data.solv_groups.solv_to_group[solv_id], set()).update(dep_ids)
         return out
 
-    def leaf_has_problem(self, group_id: GroupId) -> bool:
-        return group_id in self.nothing_provides_groups
+    def leaf_has_problem(self, solv_grp_id: SolvableGroupId) -> bool:
+        return solv_grp_id in self.nothing_provides_groups
 
-    def leaf_problem(self, group_id: GroupId) -> DependencyId:
+    def leaf_problem(self, solv_grp_id: SolvableGroupId) -> DependencyId:
         # If there are more type of problem return an enum/union along the dep name
-        dep_ids = self.nothing_provides_groups[group_id]
+        dep_ids = self.nothing_provides_groups[solv_grp_id]
         # Picking only one of the missing dependencies
         return next(iter(dep_ids))
 
@@ -410,10 +410,12 @@ class Explainer:
     indent: str = "  "
     color: type = Color
 
-    def explain(self, path: Iterable[int, DependencyId, GroupId, ExplanationType, bool]) -> str:
+    def explain(self, path: Iterable[int, DependencyId, SolvableGroupId, ExplanationType, bool]) -> str:
         path = list(path)
         message: list[str] = []
-        for i, (self.depth, self.dep_id_from, self.group_id, type, self.node_is_in_split) in enumerate(path):
+        for i, (self.depth, self.dep_id_from, self.solv_grp_id, type, self.node_is_in_split) in enumerate(
+            path
+        ):
             if i == len(path) - 1:
                 term = "."
             elif type in [ExplanationType.leaf, ExplanationType.visited]:
@@ -432,7 +434,7 @@ class Explainer:
 
     @property
     def pkg_name(self) -> str:
-        return self.names.group_name(self.group_id)
+        return self.names.solv_group_name(self.solv_grp_id)
 
     @property
     def dep_name(self) -> str:
@@ -442,15 +444,15 @@ class Explainer:
     def pkg_repr(self) -> str:
         if self.node_is_in_split:
             return "{name} [{versions}]".format(
-                name=self.pkg_name, versions=self.names.group_versions_trunc(self.group_id)
+                name=self.pkg_name, versions=self.names.solv_group_versions_trunc(self.solv_grp_id)
             )
         return self.dep_name
 
 
 class ProblemExplainer(Explainer):
     def explain_standalone(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_problem(self.group_id):
-            missing_dep_id = self.leaf_descriptor.leaf_problem(self.group_id)
+        if self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
+            missing_dep_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
             missing_dep_name = self.names.dependency_name(missing_dep_id)
             return (
                 "The environment could not be satisfied because it requires the missing package ",
@@ -468,12 +470,12 @@ class ProblemExplainer(Explainer):
         return (self.dep_name, " for which none of the following versions can be installed")
 
     def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_conflict(self.group_id):
-            conflict_ids = self.leaf_descriptor.leaf_conflict(self.group_id)
-            conflict_names = ", ".join(self.color.unavailable(self.names.group_name(g)) for g in conflict_ids)
+        if self.leaf_descriptor.leaf_has_conflict(self.solv_grp_id):
+            conflict_ids = self.leaf_descriptor.leaf_conflict(self.solv_grp_id)
+            conflict_names = ", ".join(self.color.unavailable(self.names.solv_group_name(g)) for g in conflict_ids)
             return (self.pkg_repr, ", which conflicts with any installable versions of ", conflict_names)
-        elif self.leaf_descriptor.leaf_has_problem(self.group_id):
-            missing_dep_id = self.leaf_descriptor.leaf_problem(self.group_id)
+        elif self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
+            missing_dep_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
             missing_dep_name = self.names.dependency_name(missing_dep_id)
             return (
                 self.pkg_repr,
@@ -501,8 +503,8 @@ class InstallExplainer(Explainer):
         return (self.dep_name, " is requested," if self.depth == 1 else "", " with the potential options")
 
     def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_problem(self.group_id):
-            missing_dep_id = self.leaf_descriptor.leaf_problem(self.group_id)
+        if self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
+            missing_dep_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
             missing_dep_name = self.names.dependency_name(missing_dep_id)
             return (
                 self.pkg_repr,
@@ -519,8 +521,8 @@ class InstallExplainer(Explainer):
 
 
 # Groups may be superset of the dependencies
-def make_dep_id_to_groups(graph: nx.DiGraph) -> dict[DependencyId, set[GroupId]]:
-    groups: dict[DependencyId, set[GroupId]] = {}
+def make_dep_id_to_groups(graph: nx.DiGraph) -> dict[DependencyId, set[SolvableGroupId]]:
+    groups: dict[DependencyId, set[SolvableGroupId]] = {}
     for (_, s), attr in graph.edges.items():
         for d in attr["dependency_ids"]:
             groups.setdefault(d, set()).add(s)
@@ -547,7 +549,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
 
     header_msg = header_message(pb_data)
 
-    if (install_root := cp_data.groups.solv_to_group.get(-1)) is not None:
+    if (install_root := cp_data.solv_groups.solv_to_group.get(-1)) is not None:
         inst_explainer = InstallExplainer(names, leaf_descriptor)
         install_msg = inst_explainer.explain(
             mer.algorithm.explanation_path(cp_data.graph, install_root, set(), is_multi, explore_all=True)
@@ -555,7 +557,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
     else:
         install_msg = None
 
-    problem_root = cp_data.groups.solv_to_group[0]
+    problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
     problem_msg = pb_explainer.explain(
         mer.algorithm.explanation_path(cp_data.graph, problem_root, set(), is_multi, explore_all=False)
