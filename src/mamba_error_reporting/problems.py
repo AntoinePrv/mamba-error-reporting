@@ -184,6 +184,17 @@ def create_pytorch_cuda() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["python=2.7", "pytorch"], cuda="10.2.0")
 
 
+def create_cudatoolkit() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    return create_conda_forge(
+        ["python=3.7", "cudatoolkit=11.1", "cudnn=8.0", "pytorch=1.8", "torchvision=0.9=*py37_cu111*"],
+        cuda="11.1",
+    )
+
+
+def create_jpeg9b() -> tuple[libmambapy.Solver, libmambapy.Pool]:
+    return create_conda_forge(["python=3.7", "jpeg=9b"])
+
+
 def create_r_base() -> tuple[libmambapy.Solver, libmambapy.Pool]:
     return create_conda_forge(["r-base=3.5.* ", "pandas=0", "numpy<1.20.0", "matplotlib=2", "r-matchit=4.*"])
 
