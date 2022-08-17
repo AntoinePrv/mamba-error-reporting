@@ -52,22 +52,8 @@ def plot_solvable_dag(pb_data: mer.algorithm.ProblemData) -> None:
 
 def plot_group_dag(pb_data: mer.algorithm.ProblemData, cp_data: mer.algorithm.CompressionData) -> None:
     names = mer.algorithm.Names(pb_data=pb_data, cp_data=cp_data)
-    node_labels = {
-        group_id: "{name}-[{versions}]".format(
-            name=names.group_name(group_id),
-            versions=names.solv_group_versions_trunc(group_id),
-        )
-        for group_id in cp_data.graph.nodes
+    node_labels = {solv_grp_id: names.solv_group_repr(solv_grp_id) for solv_grp_id in cp_data.graph.nodes}
+    edge_labels = {
+        e: names.dep_group_repr(attr["dependency_group_id"]) for e, attr in cp_data.graph.edges.items()
     }
-
-    edge_labels = {}
-    for e, attr in cp_data.graph.edges.items():
-        dep_names = {names.dependency_name(dep_id) for dep_id in attr["dependency_ids"]}
-        if len(dep_names) == 1:
-            edge_labels[e] = next(iter(dep_names))
-        else:
-            prefix = mer.utils.common_prefix(dep_names).strip()
-            edge_labels[e] = "{prefix}-[{variants}]".format(
-                    prefix=prefix, variants="|".join(v.removeprefix(prefix).strip() for v in dep_names)
-            )
     plot_dag(cp_data.graph, node_labels=node_labels, edge_labels=edge_labels)
