@@ -660,14 +660,6 @@ class InstallExplainer(Explainer):
         return (self.pkg_repr, ", which can be installed (as previously explained)")
 
 
-# Groups may be superset of the dependencies
-def make_dep_id_to_groups(graph: nx.DiGraph) -> dict[DependencyGroupId, set[SolvableGroupId]]:
-    groups: dict[DependencyGroupId, set[SolvableGroupId]] = {}
-    for (_, s), attr in graph.edges.items():
-        groups.setdefault(attr["dependency_group_id"], set()).add(s)
-    return groups
-
-
 def header_message(pb_data: ProblemData, color: type = Color) -> str | None:
     deps = {
         pb_data.dependency_names[pb_data.graph.edges[e]["dependency_id"]] for e in pb_data.graph.out_edges(0)
