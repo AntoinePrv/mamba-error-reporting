@@ -342,7 +342,7 @@ class ExplanationType(enum.Enum):
 
 @dataclasses.dataclass
 class ExplanationNode:
-    solv_grp_id: SolvableGroupId
+    solv_grp_id: SolvableGroupId | None
     solv_grp_id_from: SolvableGroupId | None
     dep_grp_id_from: DependencyGroupId | None
     depth: int
@@ -360,67 +360,71 @@ def explanation_path(
     explore_all: bool = False,
 ) -> list[ExplanationNode]:
     visited_nodes: set[SolvableGroupId] = set()
-    visited_deps: set[DependencyGroupId] = set()
-
     path: list[ExplanationNode] = []
-    to_visit: list[ExplanationNode] = [
-        ExplanationNode(
-            solv_grp_id=root,
-            solv_grp_id_from=None,
-            dep_grp_id_from=None,
-            depth=0,
-            type=None,
-            in_split=False,
-        )
-    ]
 
-    while len(to_visit) > 0:
-        current = to_visit.pop()
-
+    def visit(
+        solv_grp_id: SolvableGroupId, solv_grp_id_from: SolvableGroupId | None, depth: int, in_split: bool
+    ):
         successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
-        for s in graph.successors(current.solv_grp_id):
-            successors.setdefault(graph.edges[current.solv_grp_id, s]["dependency_group_id"], []).append(s)
+        for s in graph.successors(solv_grp_id):
+            successors.setdefault(graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
 
-        # If the node is the first being visited in a version split (cannot happen on 1st node)
-        if current.in_split and (current.dep_grp_id_from not in visited_deps):
-            path.append(dataclasses.replace(current, type=ExplanationType.split))
-        current.depth += current.in_split
-
+        # Type of node we are encountering
         if len(successors) == 0:
-            path.append(
-                dataclasses.replace(
-                    current, type=(ExplanationType.standalone if current.is_root else ExplanationType.leaf)
-                )
-            )
-        elif current.solv_grp_id in visited_nodes:
-            path.append(dataclasses.replace(current, type=ExplanationType.visited))
+            explanation = ExplanationType.standalone if depth == 0 else ExplanationType.leaf
+        elif solv_grp_id in visited_nodes:
+            explanation = ExplanationType.visited
         else:
-            if explore_all:
-                dep_grp_ids = list(successors.keys())
-            else:
-                # If we only explore one dep_id, we choose the one with minimum splits
-                dep_grp_ids = [min(successors, key=lambda id: len(successors[id]))]
+            explanation = ExplanationType.root if depth == 0 else ExplanationType.diving
 
-            path.append(
-                dataclasses.replace(
-                    current, type=(ExplanationType.root if current.is_root else ExplanationType.diving)
-                )
+        if (len(successors) == 0) or (explanation == ExplanationType.visited):
+            dep_grp_ids = []
+        elif explore_all:
+            dep_grp_ids = list(successors.keys())
+        else:
+            # If we only explore one dep_id, we choose the one with minimum splits
+            dep_grp_ids = [min(successors, key=lambda id: len(successors[id]))]
+
+
+        if depth == 0:
+            dep_grp_id_from = None
+        else:
+            dep_grp_id_from = graph.edges[solv_grp_id_from, solv_grp_id]["dependency_group_id"]
+        path.append(
+            ExplanationNode(
+                solv_grp_id=solv_grp_id,
+                solv_grp_id_from=solv_grp_id_from,
+                dep_grp_id_from=dep_grp_id_from,
+                depth=depth,
+                type=explanation,
+                in_split=in_split,
             )
-            to_visit += [
-                ExplanationNode(
-                    solv_grp_id=s,
-                    solv_grp_id_from=current.solv_grp_id,
-                    dep_grp_id_from=dep_grp_id,
-                    depth=(current.depth + 1),
-                    type=None,
-                    in_split=(len(successors[dep_grp_id]) > 1),
-                )
-                for dep_grp_id in dep_grp_ids
-                for s in successors[dep_grp_id]
-            ]
+        )
+        visited_nodes.add(solv_grp_id)
 
-        visited_nodes.add(current.solv_grp_id)
-        visited_deps.add(current.dep_grp_id_from)
+        # Potentially empty
+        for dep_grp_id in dep_grp_ids:
+            children_in_split: bool = len(successors[dep_grp_id]) > 1
+            if children_in_split:
+                path.append(
+                    ExplanationNode(
+                        solv_grp_id=None,
+                        solv_grp_id_from=solv_grp_id,
+                        dep_grp_id_from=dep_grp_id,
+                        depth=(depth + 1),
+                        type=ExplanationType.split,
+                        in_split=children_in_split,
+                    )
+                )
+            for s in successors[dep_grp_id]:
+                visit(
+                    solv_grp_id=s,
+                    solv_grp_id_from=solv_grp_id,
+                    depth=(depth + 1 + children_in_split),
+                    in_split=children_in_split,
+                )
+
+    visit(solv_grp_id=root, solv_grp_id_from=None, depth=0, in_split=False)
 
     return path
 
@@ -611,10 +615,17 @@ class InstallExplainer(Explainer):
         return ("The following requirements limit the allowed versions of downstream packages:",)
 
     def explain_diving(self) -> tuple[str]:
-        return (self.pkg_repr, " is requested, and it requires" if self.node.depth == 1 else ", which requires")
+        return (
+            self.pkg_repr,
+            " is requested, and it requires" if self.node.depth == 1 else ", which requires",
+        )
 
     def explain_split(self) -> tuple[str]:
-        return (self.dep_repr, " is requested," if self.node.depth == 1 else "", " with the potential options")
+        return (
+            self.dep_repr,
+            " is requested," if self.node.depth == 1 else "",
+            " with the potential options",
+        )
 
     def explain_leaf(self) -> tuple[str]:
         if self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
