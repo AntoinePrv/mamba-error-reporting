@@ -340,60 +340,89 @@ class ExplanationType(enum.Enum):
     diving = enum.auto()
 
 
+@dataclasses.dataclass
+class ExplanationNode:
+    solv_grp_id: SolvableGroupId
+    solv_grp_id_from: SolvableGroupId | None
+    dep_grp_id_from: DependencyGroupId | None
+    depth: int
+    type: ExplanationType
+    in_split: bool
+
+    @property
+    def is_root(self) -> bool:
+        return self.depth == 0
+
+
 def explanation_path(
     graph: nx.DiGraph,
     root: NodeType,
-    visited: set[SolvableGroupId],
     explore_all: bool = False,
-) -> Iterable[int, DependencyId, SolvableGroupId, ExplanationType, bool]:
-    visited_multi = set()
-    to_visit = [(None, None, root, 0, False)]
+) -> list[ExplanationNode]:
+    visited_nodes: set[SolvableGroupId] = set()
+    visited_deps: set[DependencyGroupId] = set()
+
+    path: list[ExplanationNode] = []
+    to_visit: list[ExplanationNode] = [
+        ExplanationNode(
+            solv_grp_id=root,
+            solv_grp_id_from=None,
+            dep_grp_id_from=None,
+            depth=0,
+            type=None,
+            in_split=False,
+        )
+    ]
+
     while len(to_visit) > 0:
-        dep_grp_id_from, old_node, node, depth, node_is_in_split = to_visit.pop()
+        current = to_visit.pop()
 
         successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
-        for s in graph.successors(node):
-            successors.setdefault(graph.edges[node, s]["dependency_group_id"], []).append(s)
+        for s in graph.successors(current.solv_grp_id):
+            successors.setdefault(graph.edges[current.solv_grp_id, s]["dependency_group_id"], []).append(s)
 
-        # If the node is the first being visited in a version split
-        if node_is_in_split and (dep_grp_id_from not in visited_multi):
-            visited_multi.add(dep_grp_id_from)
-            yield (depth, dep_grp_id_from, node, ExplanationType.split, node_is_in_split)
-        depth += node_is_in_split
+        # If the node is the first being visited in a version split (cannot happen on 1st node)
+        if current.in_split and (current.dep_grp_id_from not in visited_deps):
+            path.append(dataclasses.replace(current, type=ExplanationType.split))
+        current.depth += current.in_split
 
         if len(successors) == 0:
-            visited.add(node)
-            yield (
-                depth,
-                dep_grp_id_from,
-                node,
-                ExplanationType.standalone if old_node is None else ExplanationType.leaf,
-                node_is_in_split,
+            path.append(
+                dataclasses.replace(
+                    current, type=(ExplanationType.standalone if current.is_root else ExplanationType.leaf)
+                )
             )
-        elif node in visited:
-            yield (depth, dep_grp_id_from, node, ExplanationType.visited, node_is_in_split)
+        elif current.solv_grp_id in visited_nodes:
+            path.append(dataclasses.replace(current, type=ExplanationType.visited))
         else:
-            visited.add(node)
-
             if explore_all:
                 dep_grp_ids = list(successors.keys())
             else:
                 # If we only explore one dep_id, we choose the one with minimum splits
                 dep_grp_ids = [min(successors, key=lambda id: len(successors[id]))]
 
+            path.append(
+                dataclasses.replace(
+                    current, type=(ExplanationType.root if current.is_root else ExplanationType.diving)
+                )
+            )
             to_visit += [
-                (grp_id, node, s, depth + 1, len(successors[grp_id]) > 1)
-                for grp_id in dep_grp_ids
-                for s in successors[grp_id]
+                ExplanationNode(
+                    solv_grp_id=s,
+                    solv_grp_id_from=current.solv_grp_id,
+                    dep_grp_id_from=dep_grp_id,
+                    depth=(current.depth + 1),
+                    type=None,
+                    in_split=(len(successors[dep_grp_id]) > 1),
+                )
+                for dep_grp_id in dep_grp_ids
+                for s in successors[dep_grp_id]
             ]
 
-            yield (
-                depth,
-                dep_grp_id_from,
-                node,
-                ExplanationType.root if old_node is None else ExplanationType.diving,
-                node_is_in_split,
-            )
+        visited_nodes.add(current.solv_grp_id)
+        visited_deps.add(current.dep_grp_id_from)
+
+    return path
 
 
 @dataclasses.dataclass
@@ -496,21 +525,18 @@ class Explainer:
     indent: str = "  "
     color: type = Color
 
-    def explain(self, path: Iterable[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
-        path = list(path)
+    def explain(self, path: Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
         message: list[str] = []
-        for i, (self.depth, self.dep_grp_id_from, self.solv_grp_id, type, self.node_is_in_split) in enumerate(
-            path
-        ):
+        for i, self.node in enumerate(path):
             if i == len(path) - 1:
                 term = "."
-            elif type in [ExplanationType.leaf, ExplanationType.visited]:
+            elif self.node.type in [ExplanationType.leaf, ExplanationType.visited]:
                 term = ";"
             else:
                 term = ""
             message += [
-                self.indent * self.depth,
-                *getattr(self, f"explain_{type.name}")(),
+                self.indent * self.node.depth,
+                *getattr(self, f"explain_{self.node.type.name}")(),
                 term,
                 "\n",
             ]
@@ -520,25 +546,25 @@ class Explainer:
 
     @property
     def pkg_name(self) -> str:
-        return self.names.solv_group_name(self.solv_grp_id)
+        return self.names.solv_group_name(self.node.solv_grp_id)
 
     @property
     def dep_repr(self) -> str:
-        return self.names.dep_group_repr(self.dep_grp_id_from)
+        return self.names.dep_group_repr(self.node.dep_grp_id_from)
 
     @property
     def solv_repr(self) -> str:
-        return self.names.solv_group_repr(self.solv_grp_id)
+        return self.names.solv_group_repr(self.node.solv_grp_id)
 
     @property
     def pkg_repr(self) -> str:
-        return self.solv_repr if self.node_is_in_split else self.dep_repr
+        return self.solv_repr if self.node.in_split else self.dep_repr
 
 
 class ProblemExplainer(Explainer):
     def explain_standalone(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
-            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
+        if self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
+            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
             missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
             return (
                 "The environment could not be satisfied because it requires the missing package ",
@@ -556,14 +582,14 @@ class ProblemExplainer(Explainer):
         return (self.dep_repr, " for which none of the following versions can be installed")
 
     def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_conflict(self.solv_grp_id):
-            conflict_ids = self.leaf_descriptor.leaf_conflict(self.solv_grp_id)
+        if self.leaf_descriptor.leaf_has_conflict(self.node.solv_grp_id):
+            conflict_ids = self.leaf_descriptor.leaf_conflict(self.node.solv_grp_id)
             conflict_names = ", ".join(
                 self.color.unavailable(self.names.solv_group_name(g)) for g in conflict_ids
             )
             return (self.pkg_repr, ", which conflicts with any installable versions of ", conflict_names)
-        elif self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
-            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
+        elif self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
+            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
             missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
             return (
                 self.pkg_repr,
@@ -585,14 +611,14 @@ class InstallExplainer(Explainer):
         return ("The following requirements limit the allowed versions of downstream packages:",)
 
     def explain_diving(self) -> tuple[str]:
-        return (self.pkg_repr, " is requested, and it requires" if self.depth == 1 else ", which requires")
+        return (self.pkg_repr, " is requested, and it requires" if self.node.depth == 1 else ", which requires")
 
     def explain_split(self) -> tuple[str]:
-        return (self.dep_repr, " is requested," if self.depth == 1 else "", " with the potential options")
+        return (self.dep_repr, " is requested," if self.node.depth == 1 else "", " with the potential options")
 
     def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_problem(self.solv_grp_id):
-            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.solv_grp_id)
+        if self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
+            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
             missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
             return (
                 self.pkg_repr,
@@ -601,7 +627,7 @@ class InstallExplainer(Explainer):
             )
         return (
             self.color.available(self.pkg_repr),
-            " is directly requested" if self.depth == 1 else ", which can be installed",
+            " is directly requested" if self.node.depth == 1 else ", which can be installed",
         )
 
     def explain_visited(self) -> tuple[str]:
@@ -636,7 +662,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
     if (install_root := cp_data.solv_groups.solv_to_group.get(-1)) is not None:
         inst_explainer = InstallExplainer(names, leaf_descriptor)
         install_msg = inst_explainer.explain(
-            mer.algorithm.explanation_path(cp_data.graph, install_root, set(), explore_all=True)
+            mer.algorithm.explanation_path(cp_data.graph, install_root, explore_all=True)
         )
     else:
         install_msg = None
@@ -644,7 +670,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
     problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
     problem_msg = pb_explainer.explain(
-        mer.algorithm.explanation_path(cp_data.graph, problem_root, set(), explore_all=False)
+        mer.algorithm.explanation_path(cp_data.graph, problem_root, explore_all=False)
     )
 
     return "Error: " + "\n\n".join([m for m in [header_msg, install_msg, problem_msg] if m is not None])
