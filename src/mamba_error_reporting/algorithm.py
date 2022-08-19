@@ -357,14 +357,13 @@ class ExplanationNode:
 def explanation_path(
     graph: nx.DiGraph,
     root: NodeType,
-    explore_all: bool = False,
+    leaf_status: Callable[[ExplanationType], bool],
 ) -> list[ExplanationNode]:
     visited_nodes: set[SolvableGroupId] = set()
-    path: list[ExplanationNode] = []
 
     def visit(
         solv_grp_id: SolvableGroupId, solv_grp_id_from: SolvableGroupId | None, depth: int, in_split: bool
-    ):
+    ) -> tuple[list[ExplanationNode], bool]:
         successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
         for s in graph.successors(solv_grp_id):
             successors.setdefault(graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
@@ -377,55 +376,71 @@ def explanation_path(
         else:
             explanation = ExplanationType.root if depth == 0 else ExplanationType.diving
 
-        if (len(successors) == 0) or (explanation == ExplanationType.visited):
-            dep_grp_ids = []
-        elif explore_all:
-            dep_grp_ids = list(successors.keys())
-        else:
-            # If we only explore one dep_id, we choose the one with minimum splits
-            dep_grp_ids = [min(successors, key=lambda id: len(successors[id]))]
-
-
         if depth == 0:
             dep_grp_id_from = None
         else:
             dep_grp_id_from = graph.edges[solv_grp_id_from, solv_grp_id]["dependency_group_id"]
-        path.append(
-            ExplanationNode(
-                solv_grp_id=solv_grp_id,
-                solv_grp_id_from=solv_grp_id_from,
-                dep_grp_id_from=dep_grp_id_from,
-                depth=depth,
-                type=explanation,
-                in_split=in_split,
-            )
+        current = ExplanationNode(
+            solv_grp_id=solv_grp_id,
+            solv_grp_id_from=solv_grp_id_from,
+            dep_grp_id_from=dep_grp_id_from,
+            depth=depth,
+            type=explanation,
+            in_split=in_split,
         )
         visited_nodes.add(solv_grp_id)
 
-        # Potentially empty
-        for dep_grp_id in dep_grp_ids:
-            children_in_split: bool = len(successors[dep_grp_id]) > 1
-            if children_in_split:
-                path.append(
+        if (len(successors) == 0) or (explanation == ExplanationType.visited):
+            return [current], leaf_status(current)
+
+        children_paths: list[list[ExplanationNode]] = []
+        children_status: list[bool] = []
+        for dep_grp_id, children in successors.items():
+            children_are_split: bool = len(children) > 1
+            # Get the path and success for all children
+            dep_children_path: list[ExplanationNode] = []
+            dep_children_status: bool = False
+            if children_are_split:
+                # Split node is injected dynamically
+                dep_children_path.append(
                     ExplanationNode(
                         solv_grp_id=None,
                         solv_grp_id_from=solv_grp_id,
                         dep_grp_id_from=dep_grp_id,
                         depth=(depth + 1),
                         type=ExplanationType.split,
-                        in_split=children_in_split,
+                        in_split=children_are_split,
                     )
                 )
-            for s in successors[dep_grp_id]:
-                visit(
-                    solv_grp_id=s,
+            for c in children:
+                path, status = visit(
+                    solv_grp_id=c,
                     solv_grp_id_from=solv_grp_id,
-                    depth=(depth + 1 + children_in_split),
-                    in_split=children_in_split,
+                    depth=(depth + 1 + children_are_split),
+                    in_split=children_are_split,
                 )
+                dep_children_path += path
+                dep_children_status |= status
 
-    visit(solv_grp_id=root, solv_grp_id_from=None, depth=0, in_split=False)
+            # If there are any positive status downstream of path, the status of split
+            # is considered positive
+            children_paths.append(dep_children_path)
+            children_status.append(dep_children_status)
 
+        # Looking for smallest path with negative status (or None)
+        min_path = min(
+            (p for p, s in zip(children_paths, children_status) if not s),
+            key=len,
+            default=None,
+        )
+        # There is a negative status in the children (split have previously been merged).
+        # That is enough to justify current node as negative.
+        if min_path is not None:
+            return [current]  + min_path, False
+        # Otherwise all path are needed to explain positive status
+        return [current] + list(itertools.chain.from_iterable(children_paths)), True
+
+    path, _ = visit(solv_grp_id=root, solv_grp_id_from=None, depth=0, in_split=False)
     return path
 
 
@@ -673,7 +688,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
     if (install_root := cp_data.solv_groups.solv_to_group.get(-1)) is not None:
         inst_explainer = InstallExplainer(names, leaf_descriptor)
         install_msg = inst_explainer.explain(
-            mer.algorithm.explanation_path(cp_data.graph, install_root, explore_all=True)
+            explanation_path(cp_data.graph, install_root, leaf_status=lambda _: True)
         )
     else:
         install_msg = None
@@ -681,7 +696,7 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
     problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
     problem_msg = pb_explainer.explain(
-        mer.algorithm.explanation_path(cp_data.graph, problem_root, explore_all=False)
+        mer.algorithm.explanation_path(cp_data.graph, problem_root, leaf_status=lambda _: False)
     )
 
     return "Error: " + "\n\n".join([m for m in [header_msg, install_msg, problem_msg] if m is not None])
