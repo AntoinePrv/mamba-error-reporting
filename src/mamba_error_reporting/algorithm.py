@@ -63,8 +63,7 @@ class ProblemData:
                 libmambapy.SolverRuleinfo.SOLVER_RULE_JOB_NOTHING_PROVIDES_DEP,
             ]
             if p.type in job_rules:
-                # FIXME hope -1 is not taken
-                source_id = 0 if p.source() is None else -1
+                source_id = 0
                 add_solvable(source_id, libmambapy.PackageInfo(f"root-{source_id}", "", "", 0))
                 add_dependency(source_id, p.dep_id, p.dep())
             else:
@@ -364,7 +363,7 @@ def explanation_path(
 
     def visit(
         solv_grp_id: SolvableGroupId, solv_grp_id_from: SolvableGroupId | None, depth: int, in_split: bool
-        ) -> list[ExplanationNode]:
+    ) -> list[ExplanationNode]:
         successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
         for s in graph.successors(solv_grp_id):
             successors.setdefault(graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
@@ -439,7 +438,8 @@ def explanation_path(
         )
         # There is a negative status in the children (split have previously been merged).
         # That is enough to justify current node as negative.
-        if min_path is not None:
+        # We don't select path at the root node.
+        if (min_path is not None) and (current.depth > 0):
             current.status = False
             return [current] + min_path
         # Otherwise all path are needed to explain positive status
@@ -532,7 +532,7 @@ class LeafDescriptor:
 
 
 @dataclasses.dataclass
-class Color:
+class ColorSet:
     @staticmethod
     def available(msg: str) -> str:
         return mer.color.color(msg, fg="green", style="bold")
@@ -543,11 +543,11 @@ class Color:
 
 
 @dataclasses.dataclass
-class Explainer:
+class ProblemExplainer:
     names: Names
     leaf_descriptor: LeafDescriptor
     indent: str = "  "
-    color: type = Color
+    color_set: type = ColorSet
 
     def explain(self, path: Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
         message: list[str] = []
@@ -568,132 +568,134 @@ class Explainer:
         message.pop()  # Last line break
         return "".join(message)
 
+    def color(self, msg: str) -> str:
+        return self.color_set.available(msg) if self.node.status else self.color_set.unavailable(msg)
+
     @property
     def pkg_name(self) -> str:
         return self.names.solv_group_name(self.node.solv_grp_id)
 
     @property
     def dep_repr(self) -> str:
-        return self.names.dep_group_repr(self.node.dep_grp_id_from)
+        return self.color(self.names.dep_group_repr(self.node.dep_grp_id_from))
 
     @property
     def solv_repr(self) -> str:
-        return self.names.solv_group_repr(self.node.solv_grp_id)
+        return self.color(self.names.solv_group_repr(self.node.solv_grp_id))
 
     @property
     def pkg_repr(self) -> str:
-        return self.solv_repr if self.node.in_split else self.dep_repr
+        return self.color(self.solv_repr if self.node.in_split else self.dep_repr)
 
-
-class ProblemExplainer(Explainer):
     def explain_standalone(self) -> tuple[str]:
         if self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
             missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
             missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
             return (
                 "The environment could not be satisfied because it requires the missing package ",
-                self.color.unavailable(missing_dep_name),
+                self.color_set.unavailable(missing_dep_name),
             )
         return ("The environment could not be satisfied.",)
 
     def explain_root(self) -> tuple[str]:
-        return ("The following packages could not be installed:",)
+        return ("The following packages conflict with one another",)
 
     def explain_diving(self) -> tuple[str]:
-        return (self.pkg_repr, " which requires")
+        if self.node.depth == 1:
+            return (
+                self.pkg_repr,
+                " is installable and" if self.node.status else "is uninstallable because",
+                "  it requires",
+            )
+        return (self.pkg_repr, ", which requires")
 
     def explain_split(self) -> tuple[str]:
-        return (self.dep_repr, " for which none of the following versions can be installed")
+        if self.node.depth == 1:
+            return (
+                self.dep_repr,
+                " is installable with the potential"
+                if self.node.status == 1
+                else " is uninstallable with no viable",
+                " options",
+            )
+        return (
+            self.dep_repr,
+            " with ",
+            "the potential" if self.node.status else "no viable",
+            " options",
+        )
 
     def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_conflict(self.node.solv_grp_id):
+        if self.node.status:
+            return (
+                self.color(self.pkg_repr),
+                " is requested and" if self.node.depth == 1 else ", which",
+                " can be installed",
+            )
+        elif self.leaf_descriptor.leaf_has_conflict(self.node.solv_grp_id):
             conflict_ids = self.leaf_descriptor.leaf_conflict(self.node.solv_grp_id)
             conflict_names = ", ".join(
-                self.color.unavailable(self.names.solv_group_name(g)) for g in conflict_ids
+                self.color_set.unavailable(self.names.solv_group_name(g)) for g in conflict_ids
             )
-            return (self.pkg_repr, ", which conflicts with any installable versions of ", conflict_names)
+            return (
+                self.pkg_repr,
+                " is uninstallable because it" if self.node.depth == 1 else ", which",
+                " conflicts with any installable versions of ",
+                conflict_names,
+            )
         elif self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
             missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
             missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
             return (
                 self.pkg_repr,
-                ", which requires the missing package ",
-                self.color.unavailable(missing_dep_name),
+                " is uninstallable because it" if self.node.depth == 1 else ", which",
+                " requires the missing package ",
+                self.color_set.unavailable(missing_dep_name),
             )
         else:
-            return (", which cannot be installed for an unknown reason",)
+            return (self.color(self.pkg_repr), ", which cannot be installed for an unknown reason")
 
     def explain_visited(self) -> tuple[str]:
-        return (self.pkg_repr, ", which cannot be installed (as previously explained)")
-
-
-class InstallExplainer(Explainer):
-    def explain_standalone(self) -> tuple[str]:
-        return tuple()
-
-    def explain_root(self) -> tuple[str]:
-        return ("The following requirements limit the allowed versions of downstream packages:",)
-
-    def explain_diving(self) -> tuple[str]:
         return (
             self.pkg_repr,
-            " is requested, and it requires" if self.node.depth == 1 else ", which requires",
+            ", which ",
+            "can" if self.node.status else "cannot",
+            " be installed (as previously explained)",
         )
 
-    def explain_split(self) -> tuple[str]:
-        return (
-            self.dep_repr,
-            " is requested," if self.node.depth == 1 else "",
-            " with the potential options",
-        )
 
-    def explain_leaf(self) -> tuple[str]:
-        if self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
-            missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
-            missing_dep_name = self.names.dep_group_repr(missing_dep_grp_id)
-            return (
-                self.pkg_repr,
-                ", which requires the missing package ",
-                self.color.unavailable(missing_dep_name),
-            )
-        return (
-            self.color.available(self.pkg_repr),
-            " is directly requested" if self.node.depth == 1 else ", which can be installed",
-        )
-
-    def explain_visited(self) -> tuple[str]:
-        return (self.pkg_repr, ", which can be installed (as previously explained)")
-
-
-def header_message(pb_data: ProblemData, color: type = Color) -> str | None:
+def header_message(pb_data: ProblemData, color: type = ColorSet) -> str | None:
     deps = {
         pb_data.dependency_names[pb_data.graph.edges[e]["dependency_id"]] for e in pb_data.graph.out_edges(0)
     }
     if len(deps) == 0:
         return None
-    return "Could not find any installable versions for requested package{s} {pkgs}.".format(
+    return "Could not find any compatible versions for requested package{s} {pkgs}.".format(
         s=("s" if len(deps) > 1 else ""), pkgs=", ".join(color.unavailable(d) for d in deps)
     )
 
 
 def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
+    header_msg = header_message(pb_data)
+
     names = Names(pb_data, cp_data)
     leaf_descriptor = LeafDescriptor(pb_data, cp_data)
 
-    header_msg = header_message(pb_data)
+    # Packages are considered installable the first time thay appear in a conflict, the next
+    # time it is considered a conflict.
+    installables: set[SolvableGroupId] = set()
 
-    if (install_root := cp_data.solv_groups.solv_to_group.get(-1)) is not None:
-        inst_explainer = InstallExplainer(names, leaf_descriptor)
-        install_msg = inst_explainer.explain(
-            explanation_path(cp_data.graph, install_root, leaf_status=lambda _: True)
-        )
-    else:
-        install_msg = None
+    def leaf_status(solv_grp_id: SolvableGroupId) -> bool:
+        if leaf_descriptor.leaf_has_problem(solv_grp_id):
+            return False
+        if leaf_descriptor.leaf_has_conflict(solv_grp_id):
+            if any(c in installables for c in leaf_descriptor.leaf_conflict(solv_grp_id)):
+                return False
+            installables.add(solv_grp_id)
+        return True
 
     problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
-    problem_msg = pb_explainer.explain(
-        mer.algorithm.explanation_path(cp_data.graph, problem_root, leaf_status=lambda _: False)
-    )
+    problem_msg = pb_explainer.explain(explanation_path(cp_data.graph, problem_root, leaf_status=leaf_status))
 
-    return "Error: " + "\n\n".join([m for m in [header_msg, install_msg, problem_msg] if m is not None])
+    return "Error: " + "\n\n".join([m for m in [header_msg, problem_msg] if m is not None])
