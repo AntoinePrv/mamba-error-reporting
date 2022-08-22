@@ -6,7 +6,7 @@ import enum
 import functools
 import itertools
 import re
-from typing import Any, Callable, Iterable, NewType, Sequence, TypeVar
+import typing as T
 
 import libmambapy
 import networkx as nx
@@ -14,13 +14,13 @@ import packaging.version
 
 import mamba_error_reporting as mer
 
-SolvableId = NewType("SolvableId", int)
-SolvableGroupId = NewType("SolvableGroupId", int)
-DependencyId = NewType("DependencyId", int)
-DependencyGroupId = NewType("DependencyGroupId", int)
+SolvableId = T.NewType("SolvableId", int)
+SolvableGroupId = T.NewType("SolvableGroupId", int)
+DependencyId = T.NewType("DependencyId", int)
+DependencyGroupId = T.NewType("DependencyGroupId", int)
 
-NodeType = TypeVar("NodeType")
-EdgeType = TypeVar("EdgeType")
+NodeType = T.TypeVar("NodeType")
+EdgeType = T.TypeVar("EdgeType")
 
 
 ############################
@@ -85,7 +85,7 @@ class ProblemData:
         )
 
     @property
-    def problems(self) -> Iterable[libmambapy.PackageInfo]:
+    def problems(self) -> T.Iterable[libmambapy.PackageInfo]:
         return itertools.chain.from_iterable(self.problems_by_type.values())
 
     @functools.cached_property
@@ -152,7 +152,7 @@ class SolvableGroups:
 
     group_counter: Counter = dataclasses.field(default_factory=Counter, init=False)
 
-    def add(self, solvs: Sequence[SolvableId]) -> SolvableGroupId:
+    def add(self, solvs: T.Sequence[SolvableId]) -> SolvableGroupId:
         grp_id = self.group_counter()
         self.solv_to_group.update({s: grp_id for s in solvs})
         self.group_to_solv[grp_id] = set(solvs)
@@ -166,14 +166,14 @@ class DependencyGroups:
 
     group_counter: Counter = dataclasses.field(default_factory=Counter, init=False)
 
-    def search_grp_id(self, deps: Sequence[DependencyId]) -> DependencyGroupId | None:
+    def search_grp_id(self, deps: T.Sequence[DependencyId]) -> DependencyGroupId | None:
         # Maybe not great in term of complexity
         for dep_grp_id, exisiting_deps in self.group_to_deps.items():
             if set(deps) == exisiting_deps:
                 return dep_grp_id
         return None
 
-    def add(self, deps: Sequence[DependencyId]) -> DependencyGroupId:
+    def add(self, deps: T.Sequence[DependencyId]) -> DependencyGroupId:
         # Search if there is a group id that has the same dependencies
         if (grp_id := self.search_grp_id(deps)) is not None:
             return grp_id
@@ -187,7 +187,7 @@ class DependencyGroups:
 
 
 def compatibility_graph(
-    nodes: Sequence[SolvableId], compatible: Callable[[SolvableId, SolvableId], bool]
+    nodes: T.Sequence[SolvableId], compatible: T.Callable[[SolvableId, SolvableId], bool]
 ) -> nx.Graph:
     graph = nx.Graph()
     graph.add_nodes_from(nodes)
@@ -371,9 +371,9 @@ class ExplanationNode:
 @dataclasses.dataclass
 class GraphWalker:
     graph: nx.DiGraph
-    leaf_status: Callable[[SolvableGroupId], bool]
-    split_sort_key: Callable[[SolvableGroupId], Any] = lambda s: s
-    dep_sort_key: Callable[[DependencyGroupId], Any] = lambda d: d
+    leaf_status: T.Callable[[SolvableGroupId], bool]
+    split_sort_key: T.Callable[[SolvableGroupId], T.Any] = lambda s: s
+    dep_sort_key: T.Callable[[DependencyGroupId], T.Any] = lambda d: d
 
     def successors_per_dep(
         self, solv_grp_id: SolvableGroupId
@@ -594,7 +594,7 @@ class ProblemExplainer:
     indent: tuple[tuple[str, str]] = (("│  ", "   "), ("├─ ", "└─ "))
     color_set: type = ColorSet
 
-    def explain(self, path: Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
+    def explain(self, path: T.Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
         message: list[str] = []
         for i, self.node in enumerate(path):
             if i == len(path) - 1:
