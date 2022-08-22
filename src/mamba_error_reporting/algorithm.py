@@ -359,7 +359,7 @@ def explanation_path(
     root: NodeType,
     leaf_status: Callable[[ExplanationType], bool],
 ) -> list[ExplanationNode]:
-    visited_nodes: set[SolvableGroupId] = set()
+    visited_nodes: dict[SolvableGroupId, bool] = {}
 
     def visit(
         solv_grp_id: SolvableGroupId, solv_grp_id_from: SolvableGroupId | None, depth: int, in_split: bool
@@ -389,10 +389,13 @@ def explanation_path(
             in_split=in_split,
             status=False,  # Placeholder, modified later
         )
-        visited_nodes.add(solv_grp_id)
 
-        if (len(successors) == 0) or (explanation == ExplanationType.visited):
+        if len(successors) == 0:
             current.status = leaf_status(current.solv_grp_id)
+            visited_nodes[solv_grp_id] = current.status
+            return [current]
+        if solv_grp_id in visited_nodes:
+            current.status = visited_nodes[solv_grp_id]
             return [current]
 
         children_paths: list[list[ExplanationNode]] = []
@@ -430,21 +433,23 @@ def explanation_path(
             children_paths.append(dep_children_path)
             children_status.append(dep_children_status)
 
-        # Looking for smallest path with negative status (or None)
-        min_path = min(
-            (p for p, s in zip(children_paths, children_status) if not s),
-            key=len,
-            default=None,
-        )
+        # We keep all paths to explain the the current node
+        # We don't select path at the root node.
+        if all(children_status) or (current.depth == 0):
+            explain_path = list(itertools.chain.from_iterable(children_paths))
+            current.status = True
         # There is a negative status in the children (split have previously been merged).
         # That is enough to justify current node as negative.
-        # We don't select path at the root node.
-        if (min_path is not None) and (current.depth > 0):
+        else:
+            # Selecting the smallest path with negative status to reduce the message length
+            explain_path = min(
+                (p for p, s in zip(children_paths, children_status) if not s),
+                key=len,
+            )
             current.status = False
-            return [current] + min_path
-        # Otherwise all path are needed to explain positive status
-        current.status = True
-        return [current] + list(itertools.chain.from_iterable(children_paths))
+
+        visited_nodes[solv_grp_id] = current.status
+        return [current] + explain_path
 
     return visit(solv_grp_id=root, solv_grp_id_from=None, depth=0, in_split=False)
 
