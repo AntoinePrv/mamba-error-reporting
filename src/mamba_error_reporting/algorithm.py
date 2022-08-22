@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
 import enum
 import functools
@@ -338,6 +339,15 @@ class ExplanationType(enum.Enum):
     # A regular node with at least one ancestor and at least one successor.
     diving = enum.auto()
 
+    @classmethod
+    def from_position(cls, has_predecessors: bool, has_successors: bool, is_visited: bool) -> ExplanationType:
+        if not has_successors:
+            return cls.leaf if has_predecessors else cls.standalone
+        elif is_visited:
+            return cls.visited
+        else:
+            return cls.diving if has_predecessors else cls.root
+
 
 @dataclasses.dataclass
 class ExplanationNode:
@@ -358,38 +368,87 @@ class ExplanationNode:
         return self.depth == 0
 
 
-def explanation_path(
-    graph: nx.DiGraph,
-    root: NodeType,
-    leaf_status: Callable[[ExplanationNode], bool],
-    split_sort_key: Callable[[list[ExplanationNode]], Any] = len,
-    dep_sort_key: Callable[[list[ExplanationNode]], Any] = len,
-) -> list[ExplanationNode]:
-    visited_nodes: dict[SolvableGroupId, bool] = {}
+@dataclasses.dataclass
+class GraphWalker:
+    graph: nx.DiGraph
+    leaf_status: Callable[[SolvableGroupId], bool]
+    split_sort_key: Callable[[SolvableGroupId], Any] = lambda s: s
+    dep_sort_key: Callable[[DependencyGroupId], Any] = lambda d: d
 
-    def visit(
+    def successors_per_dep(
+        self, solv_grp_id: SolvableGroupId
+    ) -> dict[DependencyGroupId, list[SolvableGroupId]]:
+        successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
+        for s in self.graph.successors(solv_grp_id):
+            successors.setdefault(self.graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
+        return successors
+
+    def visit(self, root: SolvableGroupId) -> list[ExplanationNode]:
+        return self.visit_node(
+            solv_grp_id=root,
+            solv_grp_id_from=None,
+            tree_position=[],
+            in_split=False,
+            visited_nodes={},
+        )
+
+    def visit_split(
+        self,
+        solv_grp_id_from: SolvableGroupId,
+        dep_grp_id_from: DependencyGroupId,
+        children: list[SolvableGroupId],
+        tree_position: list[bool],
+        visited_nodes: dict[SolvableGroupId, bool],
+    ) -> collections.deque[ExplanationNode]:
+        children.sort(key=self.split_sort_key)
+        # Split node is prepended dynamically
+        path: list[ExplanationNode] = [
+            ExplanationNode(
+                solv_grp_id=None,
+                solv_grp_id_from=solv_grp_id_from,
+                dep_grp_id_from=dep_grp_id_from,
+                tree_position=tree_position,
+                type=ExplanationType.split,
+                in_split=True,
+                status=False  # Placeholder
+            )
+        ]
+        for i, c in enumerate(children):
+            child_path = self.visit_node(
+                solv_grp_id=c,
+                solv_grp_id_from=solv_grp_id_from,
+                tree_position=tree_position + [(i == len(children) - 1)],
+                in_split=True,
+                visited_nodes=visited_nodes,
+            )
+            path.extend(child_path)
+            # if there are any valid option in the split, the split is iself valid
+            path[0].status |= child_path[0].status
+        return path
+
+    def visit_node(
+        self,
         solv_grp_id: SolvableGroupId,
         solv_grp_id_from: SolvableGroupId | None,
         tree_position: list[bool],
         in_split: bool,
+        visited_nodes: dict[SolvableGroupId, bool] = {},
     ) -> list[ExplanationNode]:
-        successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
-        for s in graph.successors(solv_grp_id):
-            successors.setdefault(graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
+        successors = self.successors_per_dep(solv_grp_id)
 
         # Type of node we are encountering
         depth = len(tree_position)
-        if len(successors) == 0:
-            explanation = ExplanationType.standalone if depth == 0 else ExplanationType.leaf
-        elif solv_grp_id in visited_nodes:
-            explanation = ExplanationType.visited
-        else:
-            explanation = ExplanationType.root if depth == 0 else ExplanationType.diving
+
+        explanation = ExplanationType.from_position(
+            has_predecessors=(depth > 0),
+            has_successors=(len(successors) > 0),
+            is_visited=(solv_grp_id in visited_nodes),
+        )
 
         if depth == 0:
             dep_grp_id_from = None
         else:
-            dep_grp_id_from = graph.edges[solv_grp_id_from, solv_grp_id]["dependency_group_id"]
+            dep_grp_id_from = self.graph.edges[solv_grp_id_from, solv_grp_id]["dependency_group_id"]
         current = ExplanationNode(
             solv_grp_id=solv_grp_id,
             solv_grp_id_from=solv_grp_id_from,
@@ -397,90 +456,42 @@ def explanation_path(
             type=explanation,
             in_split=in_split,
             tree_position=tree_position,
-            status=False,  # Placeholder, modified later
+            status=True,  # Placeholder, modified later
         )
 
         if len(successors) == 0:
-            current.status = leaf_status(current.solv_grp_id)
+            current.status = self.leaf_status(current.solv_grp_id)
             visited_nodes[solv_grp_id] = current.status
             return [current]
         if solv_grp_id in visited_nodes:
             current.status = visited_nodes[solv_grp_id]
             return [current]
 
-        children_paths: list[list[ExplanationNode]] = []
-        children_status: list[bool] = []
-        for dep_grp_id, children in successors.items():
-            children_are_split: bool = len(children) > 1
-            # Get the path for all children coming from same dep_id.
-            dep_children_paths: list[list[ExplanationNode]] = [
-                visit(
-                    solv_grp_id=c,
+        path: list[ExplanationNode] = [current]
+        for i, dep_grp_id in enumerate(sorted(successors.keys(), key=self.dep_sort_key)):
+            children = successors[dep_grp_id]
+            if len(children) > 1:
+                child_path = self.visit_split(
+                    children=children,
                     solv_grp_id_from=solv_grp_id,
-                    # Placeholder, it is too early to know which is last
-                    tree_position=tree_position + [False] * (1 + children_are_split),
-                    in_split=children_are_split,
+                    dep_grp_id_from=dep_grp_id,
+                    tree_position=tree_position + [i == len(successors) - 1],
+                    visited_nodes=visited_nodes,
                 )
-                for c in children
-            ]
-            dep_children_status: bool = any(path[0].status for path in dep_children_paths)
-
-            if children_are_split:
-                dep_children_paths.sort(key=split_sort_key)
-                # After sorting, we know the position in the tree.
-                # Set the last node as being the last at given position
-                for n in dep_children_paths[-1]:
-                    n.tree_position[depth + 1] = True
-
-                # Split node is prepended dynamically
-                dep_children_paths = [
-                    [
-                        ExplanationNode(
-                            solv_grp_id=None,
-                            solv_grp_id_from=solv_grp_id,
-                            dep_grp_id_from=dep_grp_id,
-                            # Placeholder, it is too ealry to know which is last
-                            tree_position=tree_position + [False],
-                            type=ExplanationType.split,
-                            in_split=children_are_split,
-                            status=dep_children_status,
-                        )
-                    ]
-                ] + dep_children_paths
-
-            # If there are any positive status downstream of path, the status of split
-            # is considered positive
-            children_paths.append(list(itertools.chain.from_iterable(dep_children_paths)))
-            children_status.append(dep_children_status)
-
-        # We keep all paths to explain the the current node
-        # We don't select path at the root node.
-        if all(children_status) or (current.depth == 0):
-            # Sort by valid status first (root node) and length of path second
-            children_paths.sort(key=dep_sort_key)
-            # After sorting, we know the position in the tree.
-            # Set the last node as being the last at given position
-            for n in children_paths[-1]:
-                n.tree_position[depth] = True
-            explain_path = list(itertools.chain.from_iterable(children_paths))
-            current.status = True
-        # There is a negative status in the children (split have previously been merged).
-        # That is enough to justify current node as negative.
-        else:
-            # Selecting the smallest path with negative status to reduce the message length
-            explain_path = min(
-                (p for p, s in zip(children_paths, children_status) if not s),
-                key=len,
-            )
-            # Only one child so it is the last one
-            for n in explain_path:
-                n.tree_position[depth] = True
-            current.status = False
+            else:
+                child_path = self.visit_node(
+                    solv_grp_id=children[0],
+                    solv_grp_id_from=solv_grp_id,
+                    tree_position=tree_position + [i == len(successors) - 1],
+                    in_split=False,
+                    visited_nodes=visited_nodes,
+                )
+            # All dependencies need to be valid for a parent to be valid
+            current.status &= child_path[0].status
+            path.extend(child_path)
 
         visited_nodes[solv_grp_id] = current.status
-        return [current] + explain_path
-
-    return visit(solv_grp_id=root, solv_grp_id_from=None, tree_position=[], in_split=False)
+        return path
 
 
 @dataclasses.dataclass
@@ -595,8 +606,8 @@ class ProblemExplainer:
 
             if self.node.depth > 0:
                 pos = self.node.tree_position
-                message += [self.indent[j == len(pos) -1][is_last] for j, is_last in enumerate(pos)]
-            message +=  [
+                message += [self.indent[j == len(pos) - 1][is_last] for j, is_last in enumerate(pos)]
+            message += [
                 *getattr(self, f"explain_{self.node.type.name}")(),
                 term,
                 "\n",
@@ -732,21 +743,20 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
         return True
 
     def split_sort_key(
-        path: list[ExplanationNode],
-    ) -> tuple[packaging.version.Version, packaging.version.Version, bool, int]:
-        versions = [packaging.version.parse(v) for v in names.solv_group_versions(path[0].solv_grp_id)]
-        return min(versions), max(versions), (not path[0].status), len(path)
+        solv_grp_id: SolvableGroupId,
+    ) -> tuple[packaging.version.Version, packaging.version.Version]:
+        versions = [packaging.version.parse(v) for v in names.solv_group_versions(solv_grp_id)]
+        return min(versions), max(versions)
 
     problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
     problem_msg = pb_explainer.explain(
-        explanation_path(
-            cp_data.graph,
-            problem_root,
+        GraphWalker(
+            graph=cp_data.graph,
             leaf_status=leaf_status,
+            dep_sort_key=lambda dep: dep,
             split_sort_key=split_sort_key,
-            dep_sort_key=lambda path: (not path[0].status, len(path)),
-        )
+        ).visit(problem_root)
     )
 
     return "Error: " + "\n\n".join([m for m in [header_msg, problem_msg] if m is not None])
