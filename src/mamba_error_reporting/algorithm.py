@@ -28,10 +28,26 @@ EdgeType = T.TypeVar("EdgeType")
 ############################
 
 
+@dataclasses.dataclass(frozen=True, repr=False)
+class DependencyInfo:
+    dep_re: T.ClassVar[re.Pattern] = re.compile(r"\s*(\w[\w-]*)\s*(.*)\s*")
+
+    name: str
+    range: str
+
+    @classmethod
+    def parse(cls, repr: str) -> DependencyInfo:
+        match = cls.dep_re.match(repr)
+        return cls(*match.groups())
+
+    def __str__(self) -> str:
+        return f"{self.name} {self.range}"
+
+
 @dataclasses.dataclass
 class ProblemData:
     problems_by_type: dict[libmambapy.SolverRuleinfo, list[libmambapy.SolverProblem]]
-    dependency_names: dict[DependencyId, str]
+    dependency_info: dict[DependencyId, DependencyInfo]
     dependency_solvables: dict[DependencyId, list[SolvableId]]
     package_info: dict[SolvableId, libmambapy.PackageInfo]
     graph: nx.DiGraph
@@ -39,7 +55,7 @@ class ProblemData:
     @staticmethod
     def from_libsolv(solver: libmambapy.Solver, pool: libmambapy.Pool) -> ProblemData:
         graph = nx.DiGraph()
-        dependency_names = {}
+        dependency_info = {}
         dependency_solvables = {}
         package_info = {}
         problems_by_type = {}
@@ -48,8 +64,8 @@ class ProblemData:
             graph.add_node(id)
             package_info[id] = pkg_info if pkg_info is not None else pool.id2pkginfo(id)
 
-        def add_dependency(source_id, dep_id, dep_name):
-            dependency_names[p.dep_id] = dep_name
+        def add_dependency(source_id, dep_id, dep_repr):
+            dependency_info[p.dep_id] = DependencyInfo.parse(dep_repr)
             dependency_solvables[dep_id] = pool.select_solvables(dep_id)
             for s in dependency_solvables[dep_id]:
                 add_solvable(s, pool.id2pkginfo(s))
@@ -78,7 +94,7 @@ class ProblemData:
 
         return ProblemData(
             graph=graph,
-            dependency_names=dependency_names,
+            dependency_info=dependency_info,
             dependency_solvables=dependency_solvables,
             package_info=package_info,
             problems_by_type=problems_by_type,
@@ -410,7 +426,7 @@ class GraphWalker:
                 tree_position=tree_position,
                 type=ExplanationType.split,
                 in_split=True,
-                status=False  # Placeholder
+                status=False,  # Placeholder
             )
         ]
         for i, c in enumerate(children):
@@ -499,8 +515,6 @@ class Names:
     pb_data: ProblemData
     cp_data: CompressionData
 
-    package_name: re.Pattern = dataclasses.field(default=re.compile(r"\w[\w-]*"), init=False)
-
     def solv_group_name(self, solv_grp_id: SolvableGroupId) -> str:
         # All sovables in a node should have the same package name
         sample_solv_id = next(iter(self.cp_data.solv_groups.group_to_solv[solv_grp_id]))
@@ -526,15 +540,11 @@ class Names:
     def dep_group_name(self, dep_grp_id: DependencyGroupId) -> str:
         # All deps in an edge should have the same package name
         sample_dep_id = next(iter(self.cp_data.dep_groups.group_to_deps[dep_grp_id]))
-        sample_dep = self.pb_data.dependency_names[sample_dep_id]
-        if (match := self.package_name.match(sample_dep)) is not None:
-            return match.group()
-        return ""
+        return self.pb_data.dependency_info[sample_dep_id].name
 
     def dep_group_versions(self, dep_grp_id: DependencyGroupId) -> list[str]:
-        dep_name = self.dep_group_name(dep_grp_id)
         unique_names = {
-            self.pb_data.dependency_names[d].removeprefix(dep_name).strip()
+            self.pb_data.dependency_info[d].range
             for d in self.cp_data.dep_groups.group_to_deps[dep_grp_id]
         }
         if "" in unique_names:
@@ -594,7 +604,9 @@ class ProblemExplainer:
     indent: tuple[tuple[str, str]] = (("│  ", "   "), ("├─ ", "└─ "))
     color_set: type = ColorSet
 
-    def explain(self, path: T.Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
+    def explain(
+        self, path: T.Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]
+    ) -> str:
         message: list[str] = []
         for i, self.node in enumerate(path):
             if i == len(path) - 1:
@@ -714,7 +726,7 @@ class ProblemExplainer:
 
 def header_message(pb_data: ProblemData, color: type = ColorSet) -> str | None:
     deps = {
-        pb_data.dependency_names[pb_data.graph.edges[e]["dependency_id"]] for e in pb_data.graph.out_edges(0)
+        pb_data.dependency_info[pb_data.graph.edges[e]["dependency_id"]] for e in pb_data.graph.out_edges(0)
     }
     if len(deps) == 0:
         return None
