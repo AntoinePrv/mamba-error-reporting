@@ -5,7 +5,7 @@ import enum
 import functools
 import itertools
 import re
-from typing import Callable, Iterable, NewType, Sequence, TypeVar
+from typing import Any, Callable, Iterable, NewType, Sequence, TypeVar
 
 import libmambapy
 import networkx as nx
@@ -344,10 +344,14 @@ class ExplanationNode:
     solv_grp_id: SolvableGroupId | None
     solv_grp_id_from: SolvableGroupId | None
     dep_grp_id_from: DependencyGroupId | None
-    depth: int
     type: ExplanationType
     in_split: bool
     status: bool
+    tree_position: list[bool]
+
+    @property
+    def depth(self) -> int:
+        return len(self.tree_position)
 
     @property
     def is_root(self) -> bool:
@@ -357,18 +361,24 @@ class ExplanationNode:
 def explanation_path(
     graph: nx.DiGraph,
     root: NodeType,
-    leaf_status: Callable[[ExplanationType], bool],
+    leaf_status: Callable[[ExplanationNode], bool],
+    split_sort_key: Callable[[list[ExplanationNode]], Any] = len,
+    dep_sort_key: Callable[[list[ExplanationNode]], Any] = len,
 ) -> list[ExplanationNode]:
     visited_nodes: dict[SolvableGroupId, bool] = {}
 
     def visit(
-        solv_grp_id: SolvableGroupId, solv_grp_id_from: SolvableGroupId | None, depth: int, in_split: bool
+        solv_grp_id: SolvableGroupId,
+        solv_grp_id_from: SolvableGroupId | None,
+        tree_position: list[bool],
+        in_split: bool,
     ) -> list[ExplanationNode]:
         successors: dict[DependencyGroupId, list[SolvableGroupId]] = {}
         for s in graph.successors(solv_grp_id):
             successors.setdefault(graph.edges[solv_grp_id, s]["dependency_group_id"], []).append(s)
 
         # Type of node we are encountering
+        depth = len(tree_position)
         if len(successors) == 0:
             explanation = ExplanationType.standalone if depth == 0 else ExplanationType.leaf
         elif solv_grp_id in visited_nodes:
@@ -384,9 +394,9 @@ def explanation_path(
             solv_grp_id=solv_grp_id,
             solv_grp_id_from=solv_grp_id_from,
             dep_grp_id_from=dep_grp_id_from,
-            depth=depth,
             type=explanation,
             in_split=in_split,
+            tree_position=tree_position,
             status=False,  # Placeholder, modified later
         )
 
@@ -402,40 +412,56 @@ def explanation_path(
         children_status: list[bool] = []
         for dep_grp_id, children in successors.items():
             children_are_split: bool = len(children) > 1
-            # Get the path and success for all children
-            dep_children_path: list[ExplanationNode] = []
-            dep_children_status: bool = False
-            for c in children:
-                path = visit(
+            # Get the path for all children coming from same dep_id.
+            dep_children_paths: list[list[ExplanationNode]] = [
+                visit(
                     solv_grp_id=c,
                     solv_grp_id_from=solv_grp_id,
-                    depth=(depth + 1 + children_are_split),
+                    # Placeholder, it is too early to know which is last
+                    tree_position=tree_position + [False] * (1 + children_are_split),
                     in_split=children_are_split,
                 )
-                dep_children_path += path
-                dep_children_status |= path[0].status
+                for c in children
+            ]
+            dep_children_status: bool = any(path[0].status for path in dep_children_paths)
+
             if children_are_split:
+                dep_children_paths.sort(key=split_sort_key)
+                # After sorting, we know the position in the tree.
+                # Set the last node as being the last at given position
+                for n in dep_children_paths[-1]:
+                    n.tree_position[depth + 1] = True
+
                 # Split node is prepended dynamically
-                dep_children_path = [
-                    ExplanationNode(
-                        solv_grp_id=None,
-                        solv_grp_id_from=solv_grp_id,
-                        dep_grp_id_from=dep_grp_id,
-                        depth=(depth + 1),
-                        type=ExplanationType.split,
-                        in_split=children_are_split,
-                        status=dep_children_status,
-                    )
-                ] + dep_children_path
+                dep_children_paths = [
+                    [
+                        ExplanationNode(
+                            solv_grp_id=None,
+                            solv_grp_id_from=solv_grp_id,
+                            dep_grp_id_from=dep_grp_id,
+                            # Placeholder, it is too ealry to know which is last
+                            tree_position=tree_position + [False],
+                            type=ExplanationType.split,
+                            in_split=children_are_split,
+                            status=dep_children_status,
+                        )
+                    ]
+                ] + dep_children_paths
 
             # If there are any positive status downstream of path, the status of split
             # is considered positive
-            children_paths.append(dep_children_path)
+            children_paths.append(list(itertools.chain.from_iterable(dep_children_paths)))
             children_status.append(dep_children_status)
 
         # We keep all paths to explain the the current node
         # We don't select path at the root node.
         if all(children_status) or (current.depth == 0):
+            # Sort by valid status first (root node) and length of path second
+            children_paths.sort(key=dep_sort_key)
+            # After sorting, we know the position in the tree.
+            # Set the last node as being the last at given position
+            for n in children_paths[-1]:
+                n.tree_position[depth] = True
             explain_path = list(itertools.chain.from_iterable(children_paths))
             current.status = True
         # There is a negative status in the children (split have previously been merged).
@@ -446,12 +472,15 @@ def explanation_path(
                 (p for p, s in zip(children_paths, children_status) if not s),
                 key=len,
             )
+            # Only one child so it is the last one
+            for n in explain_path:
+                n.tree_position[depth] = True
             current.status = False
 
         visited_nodes[solv_grp_id] = current.status
         return [current] + explain_path
 
-    return visit(solv_grp_id=root, solv_grp_id_from=None, depth=0, in_split=False)
+    return visit(solv_grp_id=root, solv_grp_id_from=None, tree_position=[], in_split=False)
 
 
 @dataclasses.dataclass
@@ -551,7 +580,7 @@ class ColorSet:
 class ProblemExplainer:
     names: Names
     leaf_descriptor: LeafDescriptor
-    indent: str = "  "
+    indent: tuple[tuple[str, str]] = (("│  ", "   "), ("├─ ", "└─ "))
     color_set: type = ColorSet
 
     def explain(self, path: Sequence[int, DependencyGroupId, SolvableGroupId, ExplanationType, bool]) -> str:
@@ -563,8 +592,11 @@ class ProblemExplainer:
                 term = ";"
             else:
                 term = ""
-            message += [
-                self.indent * self.node.depth,
+
+            if self.node.depth > 0:
+                pos = self.node.tree_position
+                message += [self.indent[j == len(pos) -1][is_last] for j, is_last in enumerate(pos)]
+            message +=  [
                 *getattr(self, f"explain_{self.node.type.name}")(),
                 term,
                 "\n",
@@ -699,8 +731,22 @@ def explain_graph(pb_data: ProblemData, cp_data: CompressionData) -> str:
             installables.add(solv_grp_id)
         return True
 
+    def split_sort_key(
+        path: list[ExplanationNode],
+    ) -> tuple[packaging.version.Version, packaging.version.Version, bool, int]:
+        versions = [packaging.version.parse(v) for v in names.solv_group_versions(path[0].solv_grp_id)]
+        return min(versions), max(versions), (not path[0].status), len(path)
+
     problem_root = cp_data.solv_groups.solv_to_group[0]
     pb_explainer = ProblemExplainer(names, leaf_descriptor)
-    problem_msg = pb_explainer.explain(explanation_path(cp_data.graph, problem_root, leaf_status=leaf_status))
+    problem_msg = pb_explainer.explain(
+        explanation_path(
+            cp_data.graph,
+            problem_root,
+            leaf_status=leaf_status,
+            split_sort_key=split_sort_key,
+            dep_sort_key=lambda path: (not path[0].status, len(path)),
+        )
+    )
 
     return "Error: " + "\n\n".join([m for m in [header_msg, problem_msg] if m is not None])
