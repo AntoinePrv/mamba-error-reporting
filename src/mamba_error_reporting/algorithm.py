@@ -431,18 +431,9 @@ class GraphWalker:
         visited_nodes: dict[SolvableGroupId, bool],
     ) -> list[ExplanationNode]:
         children.sort(key=self.split_sort_key)
-        # Split node is prepended dynamically
-        path: list[ExplanationNode] = [
-            ExplanationNode(
-                solv_grp_id=None,
-                solv_grp_id_from=solv_grp_id_from,
-                dep_grp_id_from=dep_grp_id_from,
-                tree_position=tree_position,
-                type=ExplanationType.split,
-                in_split=True,
-                status=False,  # Placeholder
-            )
-        ]
+
+        path: list[ExplanationNode] = []
+        status = False
         for i, c in enumerate(children):
             child_path = self.visit_node(
                 solv_grp_id=c,
@@ -453,8 +444,35 @@ class GraphWalker:
             )
             path.extend(child_path)
             # if there are any valid option in the split, the split is iself valid
-            path[0].status |= child_path[0].status
-        return path
+            status |= child_path[0].status
+
+        # All children are visited leaves, no grand-children.
+        # We dynamically delete all children and mark the whole thing as visited.
+        if all(n.type == ExplanationType.visited for n in path):
+            return [
+                ExplanationNode(
+                    solv_grp_id=None,
+                    solv_grp_id_from=solv_grp_id_from,
+                    dep_grp_id_from=dep_grp_id_from,
+                    tree_position=tree_position,
+                    type=ExplanationType.visited,
+                    in_split=False,
+                    status=status,
+                )
+            ]
+
+        # Split node is prepended dynamically
+        return [
+            ExplanationNode(
+                solv_grp_id=None,
+                solv_grp_id_from=solv_grp_id_from,
+                dep_grp_id_from=dep_grp_id_from,
+                tree_position=tree_position,
+                type=ExplanationType.split,
+                in_split=True,
+                status=status,
+            )
+        ] + path
 
     def visit_node(
         self,
@@ -677,7 +695,7 @@ class ProblemExplainer:
         if self.node.depth == 1:
             return (
                 self.pkg_repr,
-                " is installable and" if self.node.status else "is uninstallable because",
+                " is installable and" if self.node.status else " is uninstallable because",
                 "  it requires",
             )
         return (self.pkg_repr, ", which requires")
