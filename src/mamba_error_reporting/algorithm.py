@@ -221,6 +221,9 @@ def greedy_clique_partition(graph: nx.Graph) -> list[list[NodeType]]:
 
 
 def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
+    def same_parents(n1: SolvableId, n2: SolvableId) -> bool:
+        return set(pb_data.graph.predecessors(n1)) == set(pb_data.graph.predecessors(n2))
+
     def same_children(n1: SolvableId, n2: SolvableId) -> bool:
         return set(pb_data.graph.successors(n1)) == set(pb_data.graph.successors(n2))
 
@@ -237,6 +240,8 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
             and same_missing_name(n1, n2)
             # Packages must have the same successors
             and same_children(n1, n2)
+            # Packages must have the same predecessors
+            and same_parents(n1, n2)
         )
 
     groups = SolvableGroups()
