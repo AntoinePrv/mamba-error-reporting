@@ -225,12 +225,17 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
     def same_children(n1: SolvableId, n2: SolvableId) -> bool:
         return set(pb_data.graph.successors(n1)) == set(pb_data.graph.successors(n2))
 
+    def same_missing_name(n1: SolvableId, n2: SolvableId) -> bool:
+        s1 = {pb_data.dependency_info[d].name for d in pb_data.package_missing.get(n1, {})}
+        s2 = {pb_data.dependency_info[d].name for d in pb_data.package_missing.get(n2, {})}
+        return s1 == s2
+
     def compatible(n1: SolvableId, n2: SolvableId) -> bool:
         return (
             # Packages must not be in conflict
             ((n1, n2) not in pb_data.package_conflicts)
-            # Packages must have same missing dependencies (when that is the case)
-            and pb_data.package_missing.get(n1) == pb_data.package_missing.get(n2)
+            # Packages must have same missing dependencies name (when that is the case)
+            and same_missing_name(n1, n2)
             # Packages must have the same successors
             and same_children(n1, n2)
         )
