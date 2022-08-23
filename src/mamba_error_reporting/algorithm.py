@@ -227,6 +227,11 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
     def same_children(n1: SolvableId, n2: SolvableId) -> bool:
         return set(pb_data.graph.successors(n1)) == set(pb_data.graph.successors(n2))
 
+    def same_leaves(n1: SolvableId, n2: SolvableId) -> bool:
+        # Actual leaves are they own set of leaves, but we still want to merge them, so we return
+        # True when that is the case (same_children is an empty set).
+        return same_children(n1, n2) or (find_leaves(pb_data.graph, n1) == find_leaves(pb_data.graph, n2))
+
     def same_missing_name(n1: SolvableId, n2: SolvableId) -> bool:
         s1 = {pb_data.dependency_info[d].name for d in pb_data.package_missing.get(n1, {})}
         s2 = {pb_data.dependency_info[d].name for d in pb_data.package_missing.get(n2, {})}
@@ -241,8 +246,8 @@ def compress_solvables(pb_data: ProblemData) -> SolvableGroups:
             ((n1, n2) not in pb_data.package_conflicts)
             # Packages must have same missing dependencies name (when that is the case)
             and same_missing_name(n1, n2)
-            # Packages must have the same successors
-            and same_children(n1, n2)
+            # Relaxed version of having the same children
+            and same_leaves(n1, n2)
             # Non-leaf packages must have the same predecessors
             and (is_leaf(n1) and is_leaf(n2) or same_parents(n1, n2))
         )
@@ -334,8 +339,8 @@ def find_root(graph: nx.DiGraph, node: NodeType) -> NodeType:
     return node
 
 
-def find_leaves(graph: nx.DiGraph, node: NodeType) -> list[NodeType]:
-    leaves = []
+def find_leaves(graph: nx.DiGraph, node: NodeType) -> set[NodeType]:
+    leaves = set()
     to_visit = [node]
     visited = set()
     while len(to_visit) > 0:
@@ -344,7 +349,7 @@ def find_leaves(graph: nx.DiGraph, node: NodeType) -> list[NodeType]:
         if graph.out_degree(node) > 0:
             to_visit += [n for n in graph.successors(node) if n not in visited]
         else:
-            leaves.append(node)
+            leaves.add(node)
     return leaves
 
 
