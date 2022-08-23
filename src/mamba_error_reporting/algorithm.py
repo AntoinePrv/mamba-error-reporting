@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import collections
 import dataclasses
 import enum
 import functools
@@ -28,7 +27,7 @@ EdgeType = T.TypeVar("EdgeType")
 ############################
 
 
-@dataclasses.dataclass(frozen=True, repr=False)
+@dataclasses.dataclass(frozen=True)
 class DependencyInfo:
     dep_re: T.ClassVar[re.Pattern] = re.compile(r"\s*(\w[\w-]*)\s*(.*)\s*")
 
@@ -405,6 +404,8 @@ class GraphWalker:
         return successors
 
     def visit(self, root: SolvableGroupId) -> list[ExplanationNode]:
+        # TODO these list operations are more expensive than they need to be.
+        # TODO a recursive form is no longer required.
         return self.visit_node(
             solv_grp_id=root,
             solv_grp_id_from=None,
@@ -420,7 +421,7 @@ class GraphWalker:
         children: list[SolvableGroupId],
         tree_position: list[bool],
         visited_nodes: dict[SolvableGroupId, bool],
-    ) -> collections.deque[ExplanationNode]:
+    ) -> list[ExplanationNode]:
         children.sort(key=self.split_sort_key)
         # Split node is prepended dynamically
         path: list[ExplanationNode] = [
@@ -549,8 +550,7 @@ class Names:
 
     def dep_group_versions(self, dep_grp_id: DependencyGroupId) -> list[str]:
         unique_names = {
-            self.pb_data.dependency_info[d].range
-            for d in self.cp_data.dep_groups.group_to_deps[dep_grp_id]
+            self.pb_data.dependency_info[d].range for d in self.cp_data.dep_groups.group_to_deps[dep_grp_id]
         }
         if "" in unique_names:
             unique_names.remove("")
@@ -698,15 +698,16 @@ class ProblemExplainer:
                 " can be installed",
             )
         elif self.leaf_descriptor.leaf_has_conflict(self.node.solv_grp_id):
-            conflict_ids = self.leaf_descriptor.leaf_conflict(self.node.solv_grp_id)
-            conflict_names = ", ".join(
-                self.color_set.unavailable(self.names.solv_group_name(g)) for g in conflict_ids
-            )
+            conflict_names = {
+                self.names.solv_group_name(g)
+                for g in self.leaf_descriptor.leaf_conflict(self.node.solv_grp_id)
+            }
+            conflict_repr = ", ".join(self.color_set.unavailable(n) for n in conflict_names)
             return (
                 self.pkg_repr,
                 " is uninstallable because it" if self.node.depth == 1 else ", which",
                 " conflicts with any installable versions of ",
-                conflict_names,
+                conflict_repr,
             )
         elif self.leaf_descriptor.leaf_has_problem(self.node.solv_grp_id):
             missing_dep_grp_id = self.leaf_descriptor.leaf_problem(self.node.solv_grp_id)
