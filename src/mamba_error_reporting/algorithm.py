@@ -79,9 +79,9 @@ class ProblemData:
                 libmambapy.SolverRuleinfo.SOLVER_RULE_JOB_NOTHING_PROVIDES_DEP,
             ]
             if p.type in job_rules:
-                source_id = 0
-                add_solvable(source_id, libmambapy.PackageInfo(f"root-{source_id}", "", "", 0))
-                add_dependency(source_id, p.dep_id, p.dep())
+                p.source_id = 0
+                add_solvable(p.source_id, libmambapy.PackageInfo("root", "", "", 0))
+                add_dependency(p.source_id, p.dep_id, p.dep())
             else:
                 if p.source() is not None:
                     add_solvable(p.source_id)
@@ -665,7 +665,7 @@ class ProblemExplainer:
                 "The environment could not be satisfied because it requires the missing package ",
                 self.color_set.unavailable(missing_dep_name),
             )
-        return ("The environment could not be satisfied.",)
+        return ("The environment could not be satisfied",)
 
     def explain_root(self) -> tuple[str]:
         return ("The following packages conflict with one another",)
