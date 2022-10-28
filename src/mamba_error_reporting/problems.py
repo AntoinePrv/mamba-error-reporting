@@ -204,4 +204,4 @@ def create_scip() -> tuple[libmambapy.Solver, libmambapy.Pool]:
 
 
 def create_jupyterlab() -> tuple[libmambapy.Solver, libmambapy.Pool]:
-    return create_conda_forge(["jupyterlab>3", "openssl=3.*"])
+    return create_conda_forge(["jupyterlab>3.0", "openssl=3.0.0"])
