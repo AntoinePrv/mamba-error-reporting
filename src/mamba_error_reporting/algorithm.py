@@ -81,15 +81,15 @@ class ProblemData:
             if p.type in job_rules:
                 p.source_id = 0
                 add_solvable(p.source_id, libmambapy.PackageInfo("root", "", "", 0))
-                add_dependency(p.source_id, p.dep_id, p.dep())
+                add_dependency(p.source_id, p.dep_id, p.dep)
             else:
-                if p.source() is not None:
+                if p.source is not None:
                     add_solvable(p.source_id)
-                if p.target() is not None:
+                if p.target is not None:
                     add_solvable(p.target_id)
-                if p.dep() is not None:
+                if p.dep is not None:
                     # Assuming source is valid
-                    add_dependency(p.source_id, p.dep_id, p.dep())
+                    add_dependency(p.source_id, p.dep_id, p.dep)
 
         return ProblemData(
             graph=graph,
