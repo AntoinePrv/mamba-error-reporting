@@ -16,7 +16,9 @@ def common_prefix(iterable: Iterable[str]) -> str:
     return "".join(t[0] for t in itertools.takewhile(all_same, zip(*iterable)))
 
 
-def repr_trunc(seq: list[str], sep: str = ", ", etc: str = "...", threshold: int = 5, show: tuple[int, int] = (2, 1)) -> str:
+def repr_trunc(
+    seq: list[str], sep: str = ", ", etc: str = "...", threshold: int = 5, show: tuple[int, int] = (2, 1)
+) -> str:
     if len(seq) < threshold:
         return sep.join(seq)
     show_head, show_tail = show

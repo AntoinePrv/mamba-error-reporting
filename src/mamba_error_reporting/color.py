@@ -11,6 +11,7 @@ class Style(enum.Enum):
     strikethrough = "\033[09m"
     invisible = "\033[08m"
 
+
 class Fg(enum.Enum):
     none = ""
     black = "\033[30m"
@@ -29,6 +30,7 @@ class Fg(enum.Enum):
     pink = "\033[95m"
     lightcyan = "\033[96m"
 
+
 class Bg(enum.Enum):
     none = ""
     black = "\033[40m"
@@ -40,9 +42,8 @@ class Bg(enum.Enum):
     cyan = "\033[46m"
     lightgrey = "\033[47m"
 
-def color(
-     str, fg: Fg | str = Fg.none, bg: Bg | str = Bg.none, style: Style | str = Style.none
-) -> str:
+
+def color(str, fg: Fg | str = Fg.none, bg: Bg | str = Bg.none, style: Style | str = Style.none) -> str:
     fg = fg if isinstance(fg, Fg) else getattr(Fg, fg)
     bg = bg if isinstance(bg, Bg) else getattr(Bg, bg)
     style = style if isinstance(style, Style) else getattr(Style, style)
