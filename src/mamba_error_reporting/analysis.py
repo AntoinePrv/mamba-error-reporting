@@ -15,7 +15,7 @@ def all_problems_structured_df(solver: libmambapy.Solver) -> pd.DataFrame:
                 "dependency": p.dep,
                 "dependency_id": p.dep_id,
                 "target_id": p.target_id,
-                "target_is_pkg": p.target() is not None,
+                "target_is_pkg": p.target is not None,
                 "explanation": str(p),
             }
         )

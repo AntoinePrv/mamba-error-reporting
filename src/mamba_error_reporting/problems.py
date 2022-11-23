@@ -11,7 +11,7 @@ def _create_package(
     name: str,
     version: str,
     dependencies: Optional[list[str]] = None,
-    constraints: Optional[list[str]] = None,
+    constrains: Optional[list[str]] = None,
     build_number: int = 0,
     build_string: str = "bstring",
 ) -> dict[str, Any]:
@@ -22,7 +22,7 @@ def _create_package(
         "build_string": build_string,
         "version": version,
         "depends": dependencies if dependencies is not None else [],
-        "constraints": constraints if constraints is not None else [],
+        "constrains": constrains if constrains is not None else [],
     }
 
 

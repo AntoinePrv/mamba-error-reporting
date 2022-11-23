@@ -1,5 +1,5 @@
 import collections
-from typing import TypeVar
+from typing import TypeVar, Iterable
 
 import libmambapy
 import matplotlib.pyplot as plt
@@ -71,6 +71,13 @@ def plot_group_dag(
     return plot_dag(cp_data.graph, node_labels=node_labels, edge_labels=edge_labels, *args, **kwargs)
 
 
+def _make_networkx(nodes: Iterable[N], edges: dict[(int, int), E]) -> nx.DiGraph:
+    g = nx.DiGraph()
+    g.add_nodes_from((n, {"data": data}) for n, data in enumerate(nodes))
+    g.add_edges_from((u, v, {"data": data}) for (u, v), data in edges.items())
+    return g
+
+
 def plot_libmamba_solvable_dag(pbs: libmambapy.ProblemsGraph, *args, **kwargs):
     def node_name(n):
         if isinstance(n, libmambapy.ProblemsGraph.RootNode):
@@ -80,7 +87,7 @@ def plot_libmamba_solvable_dag(pbs: libmambapy.ProblemsGraph, *args, **kwargs):
         else:
             return str(n)
 
-    g = pbs.networkx_graph()
+    g = _make_networkx(*pbs.graph())
     node_labels = {n: node_name(g.nodes[n]["data"]) for n in g.nodes}
     edge_labels = {e: str(attr["data"]) for e, attr in g.edges.items()}
     return plot_dag(g, node_labels=node_labels, edge_labels=edge_labels, *args, **kwargs)
@@ -101,7 +108,7 @@ def plot_libmamba_compressed_dag(cp_pbs: libmambapy.CompressedProblemsGraph, *ar
         else:
             return f"{e.name()}-[{e.versions_trunc()}]"
 
-    g = cp_pbs.networkx_graph()
+    g = _make_networkx(*cp_pbs.graph())
     node_labels = {n: node_name(g.nodes[n]["data"]) for n in g.nodes}
     edge_labels = {e: edge_name(attr["data"]) for e, attr in g.edges.items()}
     return plot_dag(g, node_labels=node_labels, edge_labels=edge_labels, *args, **kwargs)
